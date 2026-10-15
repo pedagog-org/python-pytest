@@ -27,5 +27,10 @@ pedagog_pytest = ["py.typed"]
 strict = true
 files = ["src"]
 
+# rpyc ships no type information.
+[[tool.mypy.overrides]]
+module = ["rpyc", "rpyc.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -16,11 +16,15 @@ from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
 from .scoring import Rubric, Score
+
+if TYPE_CHECKING:
+    from .isolation.client import StudentFinder
+
 from .markers import (
     DEFAULT_OUTPUT_VISIBILITY,
     DEFAULT_SCORE_VISIBILITY,
@@ -185,7 +189,7 @@ class IsolationPlugin:
 
     def __init__(self, socket_path: str) -> None:
         self.socket_path = socket_path
-        self.finder: object | None = None
+        self.finder: StudentFinder | None = None
 
     def _open(self, timeout: float) -> None:
         from .isolation import client
@@ -232,7 +236,7 @@ class IsolationPlugin:
     def pytest_unconfigure(self, config: pytest.Config) -> None:
         self._close()
         if self.finder is not None and self.finder in sys.meta_path:
-            sys.meta_path.remove(self.finder)  # type: ignore[arg-type]
+            sys.meta_path.remove(self.finder)
 
 
 @dataclass

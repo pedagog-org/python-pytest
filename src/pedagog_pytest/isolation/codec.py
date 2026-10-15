@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable
+from typing import Any
 
 MAX_DEPTH = 64
 
@@ -22,11 +23,11 @@ class NotPlain(Exception):
     """The value isn't plain data (or is too deeply nested / cyclic)."""
 
 
-def encode(obj: object, on_other: Callable[[object], dict] | None = None) -> str:
+def encode(obj: object, on_other: Callable[[object], dict[str, object]] | None = None) -> str:
     """JSON text for ``obj``. Non-plain values go to ``on_other`` (which returns a
     placeholder) or raise NotPlain."""
 
-    def walk(value: object, depth: int) -> object:
+    def walk(value: Any, depth: int) -> object:
         if depth > MAX_DEPTH:
             raise NotPlain("nested too deeply")
         kind = type(value)
@@ -54,11 +55,11 @@ def encode(obj: object, on_other: Callable[[object], dict] | None = None) -> str
         raise NotPlain("nested too deeply") from e
 
 
-def decode(text: str, resolve: Callable[[int], object] | None = None) -> object:
+def decode(text: str, resolve: Callable[[int], object] | None = None) -> Any:
     """Rebuild a value. ``$ref`` handles go through ``resolve``; without one
     (the grader decoding student data) they're rejected."""
 
-    def build(value: object) -> object:
+    def build(value: Any) -> Any:
         if type(value) is list:
             return [build(v) for v in value]
         if type(value) is dict:

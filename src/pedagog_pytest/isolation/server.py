@@ -13,10 +13,13 @@ methods; nothing here ever receives a reference into the grader.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+from typing import Any
 import importlib
 import importlib.util
 import operator
 import os
+import resource
 import signal
 import socket
 import sys
@@ -31,11 +34,13 @@ from .codec import NotPlain, decode, encode
 
 # Hard cap on any child's lifetime, in case student code disarms its own alarm.
 MAX_CHILD_SECONDS = 600
+# Student code may run a few helper processes, not a fork bomb.
+DEFAULT_MAX_PROCS = 64
 # Exit status for a child that hit its per-test time limit.
 TIMEOUT_EXIT = 124
 
 # Operators the grader can apply to student objects (run on this side).
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "eq": operator.eq, "ne": operator.ne, "lt": operator.lt, "le": operator.le,
     "gt": operator.gt, "ge": operator.ge,
     "add": operator.add, "sub": operator.sub, "mul": operator.mul,
@@ -54,7 +59,7 @@ OPS = {
 # The grader drives us only through StudentService's exposed methods. rpyc's
 # allow_getattr is a master switch (exposed methods are looked up through it),
 # so it stays on while every broader attribute permission is off.
-RUNNER_CONFIG = {
+RUNNER_CONFIG: dict[str, object] = {
     "allow_public_attrs": False,
     "allow_all_attrs": False,
     "allow_safe_attrs": False,
@@ -67,16 +72,16 @@ RUNNER_CONFIG = {
 }
 
 
-class StudentService(rpyc.Service):
+class StudentService(rpyc.Service):  # type: ignore[misc]  # rpyc is untyped
     """Student objects never leave this process: the grader gets integer
     handles into ``objects`` and every exposed method takes and returns only
     strings, integers and tuples of them."""
 
     def __init__(self, code_dir: Path) -> None:
         self.code_dir = code_dir
-        self.objects: dict[int, object] = {}
+        self.objects: dict[int, Any] = {}
 
-    def _describe(self, value: object) -> tuple:
+    def _describe(self, value: object) -> tuple[str, str | int]:
         try:
             return ("plain", encode(value))
         except NotPlain:
@@ -84,7 +89,7 @@ class StudentService(rpyc.Service):
             self.objects[handle] = value
             return ("ref", handle)
 
-    def _decode(self, payload: str) -> object:
+    def _decode(self, payload: str) -> Any:
         return decode(payload, resolve=self.objects.__getitem__)
 
     def exposed_begin(self, timeout: float) -> None:
@@ -92,7 +97,7 @@ class StudentService(rpyc.Service):
             signal.signal(signal.SIGALRM, lambda *_: os._exit(TIMEOUT_EXIT))
             signal.setitimer(signal.ITIMER_REAL, timeout)
 
-    def exposed_module_names(self) -> tuple:
+    def exposed_module_names(self) -> tuple[str, ...]:
         names = []
         for entry in sorted(self.code_dir.iterdir()):
             if entry.suffix == ".py" and entry.stem.isidentifier():
@@ -107,23 +112,23 @@ class StudentService(rpyc.Service):
         except (ImportError, ValueError):
             return False
 
-    def exposed_load(self, name: str) -> tuple:
+    def exposed_load(self, name: str) -> tuple[str, str | int]:
         return self._describe(importlib.import_module(name))
 
     def exposed_hasattr(self, handle: int, name: str) -> bool:
         return hasattr(self.objects[handle], name)
 
-    def exposed_getattr(self, handle: int, name: str) -> tuple:
+    def exposed_getattr(self, handle: int, name: str) -> tuple[str, str | int]:
         return self._describe(getattr(self.objects[handle], name))
 
     def exposed_setattr(self, handle: int, name: str, payload: str) -> None:
         setattr(self.objects[handle], name, self._decode(payload))
 
-    def exposed_call(self, handle: int, payload: str) -> tuple:
+    def exposed_call(self, handle: int, payload: str) -> tuple[str, str | int]:
         args, kwargs = self._decode(payload)
         return self._describe(self.objects[handle](*args, **kwargs))
 
-    def exposed_op(self, name: str, payload: str) -> tuple:
+    def exposed_op(self, name: str, payload: str) -> tuple[str, str | int]:
         return self._describe(OPS[name](*self._decode(payload)))
 
 
@@ -137,7 +142,17 @@ def _handle(conn: socket.socket, code_dir: Path) -> None:
         connection.close()
 
 
-def serve(socket_path: Path, code_dir: Path) -> None:
+def _sweep() -> None:
+    """Kill every other process of this user: lingering background processes a
+    test started must not survive into the next one. Only safe as the dedicated
+    runner user (kill(-1) reaches everything the caller may signal)."""
+    try:
+        os.kill(-1, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def serve(socket_path: Path, code_dir: Path, sweep: bool = False) -> None:
     if socket_path.exists():
         socket_path.unlink()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -152,6 +167,8 @@ def serve(socket_path: Path, code_dir: Path) -> None:
             done, _ = os.waitpid(pid, os.WNOHANG)
             if done:
                 del children[pid]
+                if sweep and not children:
+                    _sweep()
             elif now - started > MAX_CHILD_SECONDS:
                 os.kill(pid, signal.SIGKILL)
         try:
@@ -173,8 +190,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="pedagog student-code runner")
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--code", required=True, type=Path)
+    parser.add_argument("--sweep", action="store_true",
+                        help="after each test, kill this user's other processes (dedicated runner user only)")
+    parser.add_argument("--max-procs", type=int, default=None,
+                        help=f"per-user process limit (e.g. {DEFAULT_MAX_PROCS}); unset leaves the limit alone")
     args = parser.parse_args()
-    serve(args.socket, args.code.resolve())
+    if args.sweep and os.getuid() == 0:
+        parser.error("--sweep must not run as root")
+    if args.max_procs is not None:
+        resource.setrlimit(resource.RLIMIT_NPROC, (args.max_procs, args.max_procs))
+    serve(args.socket, args.code.resolve(), sweep=args.sweep)
 
 
 if __name__ == "__main__":

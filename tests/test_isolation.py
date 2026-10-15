@@ -285,3 +285,20 @@ def test_objects_do_not_outlive_their_test(pytester, runner):
         """,
     )
     assert_all_pass(results, "test_make", "test_reuse")
+
+
+def test_oversized_replies_are_refused(pytester, runner):
+    runner(flood="def huge():\n    return 'x' * (17 * 1024 * 1024)\n")
+    results = run(
+        pytester,
+        """
+        import pytest
+        from pedagog_pytest.isolation.client import IsolationError
+        from flood import huge
+
+        def test_refused():
+            with pytest.raises(IsolationError, match="MiB of data"):
+                huge()
+        """,
+    )
+    assert_all_pass(results, "test_refused")

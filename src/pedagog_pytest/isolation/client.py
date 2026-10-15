@@ -21,13 +21,15 @@ import importlib.machinery
 import sys
 import threading
 import types
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import rpyc
 from rpyc.utils.factory import unix_connect
 
 from .codec import NotPlain, decode, encode
 
-GRADER_CONFIG = {
+GRADER_CONFIG: dict[str, object] = {
     "allow_public_attrs": False,
     "allow_all_attrs": False,
     "allow_safe_attrs": False,
@@ -46,14 +48,24 @@ class IsolationError(Exception):
     """Something can't be done across the process boundary."""
 
 
-def _check_reply(reply: object) -> tuple[str, object]:
+# Larger plain-data replies are refused before decoding, so student code can't
+# exhaust the grader's memory with a huge return value.
+MAX_REPLY_CHARS = 16 * 1024 * 1024
+
+
+def _check_reply(reply: object) -> tuple[str, str | int]:
     if (
         type(reply) is tuple
         and len(reply) == 2
         and reply[0] in ("plain", "ref")
         and type(reply[1]) is (str if reply[0] == "plain" else int)
     ):
-        return reply
+        kind, value = cast(tuple[str, Any], reply)
+        if kind == "plain" and len(value) > MAX_REPLY_CHARS:
+            raise IsolationError(
+                f"student code returned more than {MAX_REPLY_CHARS // (1024 * 1024)} MiB of data"
+            )
+        return kind, value
     raise IsolationError("malformed reply from the student process")
 
 
@@ -74,12 +86,12 @@ class Session:
         except Exception:
             pass
 
-    def unpack(self, reply: object) -> object:
+    def unpack(self, reply: object) -> Any:
         kind, value = _check_reply(reply)
-        return decode(value) if kind == "plain" else Proxy(self, value)
+        return decode(cast(str, value)) if kind == "plain" else Proxy(self, cast(int, value))
 
     def pack(self, obj: object) -> str:
-        def on_other(value: object) -> dict:
+        def on_other(value: object) -> dict[str, object]:
             if isinstance(value, Proxy):
                 return {"$ref": value._pedagog_handle()}
             raise IsolationError(
@@ -109,7 +121,7 @@ def _active() -> Session:
     return current.session
 
 
-def _op(name: str, *args: object) -> object:
+def _op(name: str, *args: object) -> Any:
     session = _active()
     return session.unpack(session.root.op(name, session.pack(args)))
 
@@ -118,17 +130,19 @@ class Proxy:
     """A student object in the runner. Valid only within the test that made it."""
 
     __slots__ = ("_pedagog_session", "_pedagog_id")
+    _pedagog_session: Session | None
+    _pedagog_id: int | None
 
     def __init__(self, session: Session | None, handle: int | None) -> None:
         object.__setattr__(self, "_pedagog_session", session)
         object.__setattr__(self, "_pedagog_id", handle)
 
     def _pedagog_handle(self) -> int:
-        if self._pedagog_session is not current.session or current.session is None:
+        if self._pedagog_session is not current.session or current.session is None or self._pedagog_id is None:
             raise IsolationError("this student object belongs to an earlier test")
         return self._pedagog_id
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> Any:
         if name.startswith("_pedagog"):
             raise AttributeError(name)
         session = _active()
@@ -138,35 +152,35 @@ class Proxy:
         session = _active()
         session.root.setattr(self._pedagog_handle(), name, session.pack(value))
 
-    def __call__(self, *args: object, **kwargs: object) -> object:
+    def __call__(self, *args: object, **kwargs: object) -> Any:
         session = _active()
         return session.unpack(session.root.call(self._pedagog_handle(), session.pack((list(args), kwargs))))
 
     def __repr__(self) -> str:
-        return _op("repr", self)
+        return cast(str, _op("repr", self))
 
     def __str__(self) -> str:
-        return _op("str", self)
+        return cast(str, _op("str", self))
 
     def __len__(self) -> int:
-        return _op("len", self)
+        return cast(int, _op("len", self))
 
     def __bool__(self) -> bool:
-        return _op("bool", self)
+        return cast(bool, _op("bool", self))
 
     def __hash__(self) -> int:
-        return _op("hash", self)
+        return cast(int, _op("hash", self))
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         return _op("iter", self)
 
-    def __next__(self):
+    def __next__(self) -> Any:
         return _op("next", self)
 
     def __contains__(self, item: object) -> bool:
-        return _op("contains", self, item)
+        return cast(bool, _op("contains", self, item))
 
-    def __getitem__(self, key: object) -> object:
+    def __getitem__(self, key: object) -> Any:
         return _op("getitem", self, key)
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -176,23 +190,33 @@ class Proxy:
         _op("delitem", self, key)
 
     def __int__(self) -> int:
-        return _op("int", self)
+        return cast(int, _op("int", self))
 
     def __float__(self) -> float:
-        return _op("float", self)
+        return cast(float, _op("float", self))
 
     def __index__(self) -> int:
-        return _op("index", self)
+        return cast(int, _op("index", self))
 
 
-def _binary(name: str):
-    def forward(self, other):
+_BinaryOp = Callable[[Proxy, object], Any]
+
+
+def _binary(name: str) -> tuple[_BinaryOp, _BinaryOp]:
+    def forward(self: Proxy, other: object) -> Any:
         return _op(name, self, other)
 
-    def reflected(self, other):
+    def reflected(self: Proxy, other: object) -> Any:
         return _op(name, other, self)
 
     return forward, reflected
+
+
+def _unary(name: str) -> Callable[[Proxy], Any]:
+    def apply(self: Proxy) -> Any:
+        return _op(name, self)
+
+    return apply
 
 
 for _name in ("eq", "ne", "lt", "le", "gt", "ge"):
@@ -203,7 +227,7 @@ for _name in ("add", "sub", "mul", "truediv", "floordiv", "mod", "pow", "matmul"
     setattr(Proxy, f"__{_name}__", _fwd)
     setattr(Proxy, f"__r{_name}__", _rev)
 for _name in ("neg", "pos", "abs", "invert"):
-    setattr(Proxy, f"__{_name}__", (lambda n: lambda self: _op(n, self))(_name))
+    setattr(Proxy, f"__{_name}__", _unary(_name))
 
 
 class LateProxy(Proxy):
@@ -214,6 +238,7 @@ class LateProxy(Proxy):
     """
 
     __slots__ = ("_pedagog_path",)
+    _pedagog_path: tuple[str, ...]
 
     def __init__(self, path: tuple[str, ...]) -> None:
         super().__init__(None, None)
@@ -230,6 +255,7 @@ class LateProxy(Proxy):
                 raise IsolationError(f"{'.'.join(self._pedagog_path)} is plain data, not an object")
             object.__setattr__(self, "_pedagog_session", session)
             object.__setattr__(self, "_pedagog_id", value._pedagog_id)
+        assert self._pedagog_id is not None
         return self._pedagog_id
 
 
@@ -239,7 +265,7 @@ _resolving = threading.local()
 class StudentModule(types.ModuleType):
     """Stands in for a student module in the grader process."""
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> Any:
         # Never re-enter (e.g. from library code probing sys.modules mid-request).
         if name.startswith("__") or getattr(_resolving, "active", False):
             raise AttributeError(name)
@@ -262,7 +288,12 @@ class StudentFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     def __init__(self, names: tuple[str, ...]) -> None:
         self.names = frozenset(names)
 
-    def find_spec(self, fullname, path=None, target=None):
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None = None,
+        target: types.ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
         if fullname.split(".")[0] not in self.names:
             return None
         # Submodules must really exist: `from pkg import missing` otherwise falls
@@ -271,18 +302,18 @@ class StudentFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             return None
         return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
 
-    def create_module(self, spec):
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> types.ModuleType:
         module = StudentModule(spec.name)
         module.__path__ = []
         return module
 
-    def exec_module(self, module) -> None:
+    def exec_module(self, module: types.ModuleType) -> None:
         pass
 
 
 def install(names: object) -> StudentFinder:
     if type(names) is not tuple or not all(type(n) is str for n in names):
         raise IsolationError("malformed module list from the student process")
-    finder = StudentFinder(names)
+    finder = StudentFinder(cast(tuple[str, ...], names))
     sys.meta_path.insert(0, finder)
     return finder
