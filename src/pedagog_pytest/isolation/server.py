@@ -13,6 +13,7 @@ methods; nothing here ever receives a reference into the grader.
 from __future__ import annotations
 
 import argparse
+import ctypes
 from collections.abc import Callable
 from typing import Any
 import importlib
@@ -144,14 +145,38 @@ def _handle(conn: socket.socket, code_dir: Path) -> None:
         connection.close()
 
 
+PR_SET_CHILD_SUBREAPER = 36
+
+
+def _become_subreaper() -> None:
+    """Have orphaned student processes re-parented to this server (not the
+    container's PID 1, which won't reap them), so killed ones don't linger as
+    zombies that still count against the per-user process limit."""
+    if sys.platform != "linux":
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_CHILD_SUBREAPER) failed")
+
+
 def _sweep() -> None:
-    """Kill every other process of this user: lingering background processes a
-    test started must not survive into the next one. Only safe as the dedicated
-    runner user (kill(-1) reaches everything the caller may signal)."""
+    """Kill every other process of this user, then reap them: lingering
+    background processes a test started must not survive into the next one.
+    Only safe as the dedicated runner user (kill(-1) reaches everything the
+    caller may signal)."""
     try:
         os.kill(-1, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return
+    # Everything killed was our descendant (we're the subreaper); collect them.
+    deadline = time.monotonic() + RETIRE_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            time.sleep(0.01)
 
 
 def _retire(children: dict[int, float]) -> None:
@@ -218,6 +243,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.sweep and os.getuid() == 0:
         parser.error("--sweep must not run as root")
+    if args.sweep:
+        _become_subreaper()
     if args.max_procs is not None:
         resource.setrlimit(resource.RLIMIT_NPROC, (args.max_procs, args.max_procs))
     serve(args.socket, args.code.resolve(), sweep=args.sweep)
