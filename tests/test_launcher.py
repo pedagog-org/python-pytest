@@ -180,3 +180,145 @@ def test_refuses_to_run_without_root(assignment):
     )
     assert proc.returncode == 2
     assert "must start as root" in proc.stderr
+
+
+ATTACKER = """
+    import os
+    import signal
+    import sys
+    import time
+
+    def _try(action):
+        try:
+            action()
+            return "succeeded"
+        except OSError:
+            return "denied"
+
+    def forge_results(results_dir):
+        def write():
+            with open(os.path.join(results_dir, "results.yaml"), "w") as f:
+                f.write('{"tests": [], "summary": {"score": 100, "total": 100}}')
+        return _try(write)
+
+    def tamper_with_tests(tests_file):
+        def write():
+            with open(tests_file, "a") as f:
+                f.write("\\n# owned")
+        return _try(write)
+
+    def _pids_of(uid):
+        pids = []
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                try:
+                    if os.stat(f"/proc/{entry}").st_uid == uid:
+                        pids.append(int(entry))
+                except FileNotFoundError:
+                    pass
+        return pids
+
+    def kill_the_grader(grader_uid):
+        targets = _pids_of(grader_uid)
+        if not targets:
+            return "no grader process found"
+        return _try(lambda: [os.kill(pid, signal.SIGKILL) for pid in targets])
+
+    def read_grader_proc(grader_uid):
+        pid = _pids_of(grader_uid)[0]
+        leaks = []
+        for name in ("environ", "mem", "cmdline_fd"):
+            path = f"/proc/{pid}/{name}" if name != "cmdline_fd" else f"/proc/{pid}/fd/0"
+            try:
+                with open(path, "rb") as f:
+                    f.read(16)
+                leaks.append(name)
+            except OSError:
+                pass
+        return leaks or "denied"
+
+    def leave_a_background_process():
+        if os.fork() == 0:
+            os.setsid()
+            if os.fork() == 0:
+                time.sleep(120)
+            os._exit(0)
+        return "started"
+
+    def other_runner_processes():
+        mine = {os.getpid(), os.getppid()}
+        return sorted(p for p in _pids_of(os.getuid()) if p not in mine)
+
+    def fork_bomb():
+        children = 0
+        try:
+            while children < 10_000:
+                if os.fork() == 0:
+                    time.sleep(120)
+                    os._exit(0)
+                children += 1
+        except OSError:
+            pass
+        return children
+
+    def flood_output():
+        chunk = "x" * 1_000_000
+        for _ in range(50):
+            sys.stdout.write(chunk)
+            sys.stderr.write(chunk)
+        return "flooded"
+"""
+
+
+def test_student_code_cannot_cheat_or_interfere(assignment):
+    grader_uid = pwd.getpwnam("grader").pw_uid
+    tests, code, results = assignment(
+        f"""
+        import os
+        from attacker import (
+            forge_results, tamper_with_tests, kill_the_grader, read_grader_proc,
+            leave_a_background_process, other_runner_processes, fork_bomb, flood_output,
+        )
+
+        RESULTS = os.environ["PEDAGOG_RESULTS_DIR"]
+        TESTS_FILE = os.path.abspath(__file__)
+
+        def test_1_cannot_forge_results():
+            assert forge_results(RESULTS) == "denied"
+
+        def test_2_cannot_tamper_with_tests():
+            assert tamper_with_tests(TESTS_FILE) == "denied"
+
+        def test_3_cannot_kill_the_grader():
+            assert kill_the_grader({grader_uid}) == "denied"
+
+        def test_4_cannot_read_grader_memory_or_environment():
+            assert read_grader_proc({grader_uid}) == "denied"
+
+        def test_5_starts_a_background_process():
+            assert leave_a_background_process() == "started"
+
+        def test_6_background_process_did_not_survive():
+            assert other_runner_processes() == []
+
+        def test_7_fork_bomb_is_capped():
+            assert fork_bomb() < 64
+
+        def test_8_tests_still_run_after_the_fork_bomb():
+            assert other_runner_processes() == []
+
+        def test_9_output_flood_goes_nowhere():
+            assert flood_output() == "flooded"
+        """,
+        {"attacker": ATTACKER},
+    )
+    proc = launch(tests, code, results)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    got = outcomes(results)
+    failed = {k: v["output"][-1500:] for k, v in got.items() if v["status"] != "pass"}
+    assert len(got) == 9 and not failed, failed
+    # The 100 MB flood never reached the launcher's (and so the pod's) logs.
+    assert len(proc.stdout) + len(proc.stderr) < 200_000
+    # Nothing of the runner's outlives the launcher.
+    leftover = subprocess.run(["sh", "-c", "ps -u runner -o pid= | wc -l"], capture_output=True, text=True)
+    assert leftover.stdout.strip() == "0"

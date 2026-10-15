@@ -29,6 +29,8 @@ GRADER_USER = "grader"
 RUNNER_USER = "runner"
 RESULTS_URL_ENV = "PEDAGOG_RESULTS_URL"
 SOCKET_WAIT_SECONDS = 15
+# Per-user process cap for student code (helper processes yes, fork bombs no).
+RUNNER_MAX_PROCS = 64
 # Only these reach the children; everything else (notably the results URL) stays here.
 PASSTHROUGH_ENV = ("PATH", "LANG", "LC_ALL", "TZ")
 
@@ -72,15 +74,23 @@ def _home(work: Path, user: str) -> Path:
     return home
 
 
-def _start_runner(work: Path, code: Path) -> tuple[subprocess.Popen, Path]:
+def _start_runner(work: Path, code: Path) -> tuple[subprocess.Popen[bytes], Path]:
     sock_dir = work / "sock"
     sock_dir.mkdir()
     _chown_tree(sock_dir, RUNNER_USER)
     sock = sock_dir / "runner.sock"
     cmd = _as(RUNNER_USER) + [
         sys.executable, "-m", "pedagog_pytest.isolation.server", "--socket", str(sock), "--code", str(code),
+        "--sweep", "--max-procs", str(RUNNER_MAX_PROCS),
     ]
-    proc = subprocess.Popen(cmd, env=_clean_env(_home(work, RUNNER_USER)), start_new_session=True)
+    # Student output goes nowhere, so it can't flood the run's logs.
+    proc = subprocess.Popen(
+        cmd,
+        env=_clean_env(_home(work, RUNNER_USER)),
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     deadline = time.monotonic() + SOCKET_WAIT_SECONDS
     while not sock.exists():
         if proc.poll() is not None or time.monotonic() > deadline:
@@ -89,12 +99,19 @@ def _start_runner(work: Path, code: Path) -> tuple[subprocess.Popen, Path]:
     return proc, sock
 
 
-def _stop(proc: subprocess.Popen) -> None:
+def _stop(proc: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     proc.wait()
+    # Anything student code started that escaped the process group: kill every
+    # remaining runner process (kill(-1) as runner spares only the caller).
+    subprocess.run(
+        _as(RUNNER_USER) + [sys.executable, "-c", "import os, signal\ntry:\n os.kill(-1, signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
+        env=_clean_env(Path("/")),
+        check=False,
+    )
 
 
 def _upload(path: Path, url: str) -> None:
