@@ -34,6 +34,8 @@ from .codec import NotPlain, decode, encode
 
 # Hard cap on any child's lifetime, in case student code disarms its own alarm.
 MAX_CHILD_SECONDS = 600
+# How long a finished test's process gets to exit before it's killed.
+RETIRE_SECONDS = 2.0
 # Student code may run a few helper processes, not a fork bomb.
 DEFAULT_MAX_PROCS = 64
 # Exit status for a child that hit its per-test time limit.
@@ -152,6 +154,22 @@ def _sweep() -> None:
         pass
 
 
+def _retire(children: dict[int, float]) -> None:
+    """Wait briefly for earlier children (their grader connections are closed,
+    so they're exiting), then kill and reap any that linger."""
+    deadline = time.monotonic() + RETIRE_SECONDS
+    for pid in list(children):
+        while True:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if done or time.monotonic() > deadline:
+                break
+            time.sleep(0.01)
+        if not done:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        del children[pid]
+
+
 def serve(socket_path: Path, code_dir: Path, sweep: bool = False) -> None:
     if socket_path.exists():
         socket_path.unlink()
@@ -167,14 +185,17 @@ def serve(socket_path: Path, code_dir: Path, sweep: bool = False) -> None:
             done, _ = os.waitpid(pid, os.WNOHANG)
             if done:
                 del children[pid]
-                if sweep and not children:
-                    _sweep()
             elif now - started > MAX_CHILD_SECONDS:
                 os.kill(pid, signal.SIGKILL)
         try:
             conn, _ = listener.accept()
         except TimeoutError:
             continue
+        if sweep:
+            # Tests run one at a time: before the next one starts, make sure the
+            # previous test's process is gone and nothing it started survives.
+            _retire(children)
+            _sweep()
         pid = os.fork()
         if pid == 0:
             listener.close()
@@ -191,7 +212,7 @@ def main() -> None:
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--code", required=True, type=Path)
     parser.add_argument("--sweep", action="store_true",
-                        help="after each test, kill this user's other processes (dedicated runner user only)")
+                        help="before each test, kill this user's other processes (dedicated runner user only)")
     parser.add_argument("--max-procs", type=int, default=None,
                         help=f"per-user process limit (e.g. {DEFAULT_MAX_PROCS}); unset leaves the limit alone")
     args = parser.parse_args()
