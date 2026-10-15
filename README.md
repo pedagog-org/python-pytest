@@ -105,6 +105,44 @@ Each test gets 10 s by default (`--pedagog-timeout SECONDS` changes the default,
 overrides per test). The limit raises an exception that `except Exception` in student code
 can't swallow. Under process isolation the runner process enforces it as well.
 
+## Process isolation
+
+With `testing.isolation: process` (pedagog's default), student code never runs in the test
+process. pedagog's launcher starts a runner server as the unprivileged `runner` user and runs
+pytest as `grader`; the plugin routes student modules to the runner:
+
+```python
+from linked_list import LinkedList   # resolves to the student's module in the runner
+
+def test_append():
+    l = LinkedList()                 # the object lives in the runner process
+    l.append(1)
+    assert l.to_list() == [1]        # plain data comes back as real local values
+```
+
+Rules:
+
+- **Fresh process per test.** Each test talks to a newly forked runner process, so student
+  module state never leaks between tests, and a hang or crash only fails that test.
+- **Arguments cross as copies.** Plain data (numbers, strings, bytes, lists, tuples, dicts,
+  sets) is copied; functions, generators and other live objects can't be passed. Tests that
+  need callbacks use `isolation: in-process`.
+- **Student objects stay remote.** Tests hold proxies (attribute access, calls, operators,
+  iteration, `len`, indexing all work); `isinstance`/`type()` checks against student classes
+  don't, and student objects don't outlive the test that made them (so don't keep them in
+  module- or session-scoped fixtures).
+- **Exceptions:** builtin exceptions raised by student code propagate with their type
+  (`pytest.raises(ValueError)` works); custom student exception classes arrive as a generic
+  remote error (match on the message instead).
+
+Security model: the runner holds student objects in a table and the grader only ever sees
+integer handles, so rpyc's object-reference machinery is never used for student data.
+Everything crossing the boundary is plain JSON (no pickle), every reply is type-checked, and
+the grader's end of the connection refuses all attribute access. A hostile student process
+can break its own grading, but can't read or run anything in the grader. Combined with the
+`runner` user (which can't read `/pedagog/tests` or `/pedagog/solution`), student code can't
+see the hidden tests.
+
 ## Development
 
 Tests run in containers, no local Python needed:
