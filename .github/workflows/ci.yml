@@ -11,11 +11,14 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12"]
+    # Root plus the grader/runner users, as in pedagog images, so the launcher
+    # tests run instead of skipping.
+    container: python:${{ matrix.python }}-slim
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: pip install -e ".[dev]"
+      - run: |
+          useradd -r -M -u 900 -s /usr/sbin/nologin grader
+          useradd -r -M -u 901 -s /usr/sbin/nologin runner
+      - run: pip install --root-user-action=ignore -e ".[dev]"
       - run: mypy
-      - run: python -m pytest -q
+      - run: python -m pytest -q -p no:cacheprovider
