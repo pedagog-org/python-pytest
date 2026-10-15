@@ -10,16 +10,21 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sys
 import threading
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
 from .scoring import Rubric, Score
+
+if TYPE_CHECKING:
+    from .isolation.client import StudentFinder
+
 from .markers import (
     DEFAULT_OUTPUT_VISIBILITY,
     DEFAULT_SCORE_VISIBILITY,
@@ -30,6 +35,11 @@ from .markers import (
 )
 
 RESULTS_DIR_ENV: Final = "PEDAGOG_RESULTS_DIR"
+# Set by the launcher: "process" runs student code in the runner process.
+ISOLATION_ENV: Final = "PEDAGOG_ISOLATION"
+RUNNER_SOCKET_ENV: Final = "PEDAGOG_RUNNER_SOCKET"
+# Collection only imports modules; generous, but still bounded.
+COLLECTION_TIMEOUT: Final = 60.0
 # Keeps a runaway assertion message from bloating results.yaml.
 MAX_OUTPUT_CHARS: Final = 20_000
 
@@ -82,6 +92,11 @@ def pytest_configure(config: pytest.Config) -> None:
         path = os.path.join(os.environ[RESULTS_DIR_ENV], "results.yaml")
     if path is not None:
         config.pluginmanager.register(ResultsRecorder(Path(path)), "pedagog-results")
+    if os.environ.get(ISOLATION_ENV) == "process":
+        socket_path = os.environ.get(RUNNER_SOCKET_ENV)
+        if not socket_path:
+            raise pytest.UsageError(f"{ISOLATION_ENV}=process requires {RUNNER_SOCKET_ENV}")
+        config.pluginmanager.register(IsolationPlugin(socket_path), "pedagog-isolation")
 
 
 def _mark_arg(item: pytest.Item, name: str, default: Any) -> Any:
@@ -166,6 +181,62 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, object, object]:
     # A check() block failure doesn't stop the test, but it does fail it.
     _fail_on_failed_checks(item)
     return result
+
+
+class IsolationPlugin:
+    """Routes student modules to the runner: one connection for collection, then
+    a fresh one (a fresh student process) per test."""
+
+    def __init__(self, socket_path: str) -> None:
+        self.socket_path = socket_path
+        self.finder: StudentFinder | None = None
+
+    def _open(self, timeout: float) -> None:
+        from .isolation import client
+
+        client.current.session = client.Session(self.socket_path, timeout)
+
+    def _close(self) -> None:
+        from .isolation import client
+
+        if client.current.session is not None:
+            client.current.session.close()
+            client.current.session = None
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_collection(self, session: pytest.Session) -> None:
+        from .isolation import client
+
+        self._open(COLLECTION_TIMEOUT)
+        assert client.current.session is not None
+        self.finder = client.install(client.current.session.root.module_names())
+
+    def pytest_collection_finish(self, session: pytest.Session) -> None:
+        self._close()
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
+        self._open(_timeout_for(item))
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_call(self, item: pytest.Item) -> Generator[None, object, object]:
+        try:
+            return (yield)
+        except EOFError as e:
+            # The runner child exited mid-call: its time limit, or a crash.
+            raise TestTimeout(
+                f"student code exceeded its {_timeout_for(item):g}s time limit "
+                "or its process exited unexpectedly"
+            ) from e
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_runtest_teardown(self, item: pytest.Item, nextitem: pytest.Item | None) -> None:
+        self._close()
+
+    def pytest_unconfigure(self, config: pytest.Config) -> None:
+        self._close()
+        if self.finder is not None and self.finder in sys.meta_path:
+            sys.meta_path.remove(self.finder)
 
 
 @dataclass
