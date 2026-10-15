@@ -19,6 +19,7 @@ from __future__ import annotations
 import builtins
 import importlib.abc
 import importlib.machinery
+import os
 import re
 import sys
 import threading
@@ -50,14 +51,18 @@ class IsolationError(Exception):
     """Something can't be done across the process boundary."""
 
 
+# This package, wherever it's installed (site-packages, or a source checkout).
+_PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def _student_frames(remote_tb: str) -> str:
     """The parts of a remote traceback that are student code (not rpyc or
-    pedagog_pytest internals, which live in site-packages)."""
+    pedagog_pytest internals)."""
     kept: list[str] = []
     keep = False
     for line in remote_tb.splitlines():
         if line.startswith('  File "'):
-            keep = "site-packages" not in line and "<frozen" not in line
+            keep = not any(s in line for s in ("site-packages", "<frozen", f'"{_PACKAGE_DIR}{os.sep}'))
         elif not line.startswith("    "):
             keep = False
         if keep:
