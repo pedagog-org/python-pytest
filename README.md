@@ -32,10 +32,58 @@ def test_stretch_goal():
 | `visibility(level)` / `visibility(score=, output=)` | When students see the score and the output (failure messages, which can reveal what a test checks) | score `VISIBLE`, output `AFTER_END` |
 | `solution_expect(outcome)` | What the reference solution should do during validation; validation fails on a mismatch | `Expect.PASS` |
 | `timeout(seconds)` | Time limit; a slower test fails (under isolation its process is killed) | `10.0` |
+| `rubric_item(name, points)` / `rubric(Rubric)` | Partial credit: the test awards points itself (see Rubrics) | — |
 
-`Visibility` values: `VISIBLE` (immediately), `HIDDEN` (never), `AFTER_END` (after the
-deadline), `AFTER_PUBLISH` (when the instructor publishes results); also exported as module
+`Visibility` values: `VISIBLE` (immediately), `HIDDEN` (never), `AFTER_END` (once the student
+can no longer submit: the late deadline if late submissions are allowed, otherwise the due
+date), `AFTER_PUBLISH` (when the instructor publishes results); also exported as module
 constants. The package is typed (`py.typed`, checked with `mypy --strict`).
+
+## Rubrics (partial credit)
+
+Instead of all-or-nothing `@weight`, a test can award points itself. An item that's never
+awarded scores 0 (even if the test passes), and awards stand even if the test fails
+afterwards: status and score are independent.
+
+**One item** — `@rubric_item` and the `score` fixture:
+
+```python
+from pedagog_pytest import Score, rubric_item
+
+@rubric_item("Appends in order", points=10)   # name defaults to the test's name
+def test_append(score: Score):
+    score.award()                # points=FULL: all 10
+    check_edge_cases()
+    score.award(points=6)        # replaces the earlier award
+```
+
+**Several items** — a `Rubric` subclass (attribute names are the item ids), `@rubric`, and
+the `scores` fixture, which is an instance of your rubric:
+
+```python
+from pedagog_pytest import Rubric, Score, item, rubric
+
+class Design(Rubric):
+    memory_safe: Score = item("Passes valgrind with no leaks", points=10)
+    no_globals: Score = item("Avoids global state", points=5)
+    recursion: Score = item("Uses recursion", points=2, extra_credit=True)
+
+@rubric(Design)
+def test_design(scores: Design):
+    with scores.memory_safe.check():   # full points if the block completes;
+        assert leaks() == 0            #   0 plus the failure recorded if it raises
+    with scores.no_globals.check(points=3):
+        assert not uses_globals()
+    scores.recursion.award(points=1)   # still runs after a failed check
+```
+
+- `Score.award(points=FULL)` sets the item's points (0..its points); `Score.nil()` resets to 0.
+- `Score.check(points=FULL)` is a soft assertion: a failing block doesn't stop the test, but
+  the test ends as failed, listing the failed items. Time limits still stop it.
+- A rubric test's maximum is the sum of its non-extra-credit items; extra credit adds to the
+  score but not the maximum. In results.yaml its items appear under `items:` with their own
+  score, max, `extra-credit` flag and failure output.
+- `@weight`, `@rubric_item` and `@rubric` are mutually exclusive.
 
 ## Results
 

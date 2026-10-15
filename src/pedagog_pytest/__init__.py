@@ -12,13 +12,24 @@ from .markers import (
     Expect,
     Visibility,
     number,
+    rubric,
+    rubric_item,
     solution_expect,
     timeout,
     visibility,
     weight,
 )
 
+from .scoring import FULL, Full, Rubric, Score, item
+
 __all__ = [
+    "FULL",
+    "Full",
+    "Rubric",
+    "Score",
+    "item",
+    "rubric",
+    "rubric_item",
     "AFTER_END",
     "AFTER_PUBLISH",
     "DEFAULT_OUTPUT_VISIBILITY",

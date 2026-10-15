@@ -260,3 +260,166 @@ def test_invalid_decorator_arguments_are_rejected(call):
 
     with pytest.raises(ValueError):
         eval(call, vars(pedagog_pytest))
+
+
+def test_rubric_item_scores_only_what_is_awarded(pytester):
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+
+        @rubric_item("Appends in order", points=10)
+        def test_full(score: Score):
+            score.award()
+
+        @rubric_item(points=10)
+        def test_partial(score: Score):
+            score.award(points=6)
+
+        @rubric_item(points=10)
+        def test_never_awarded_scores_zero_even_on_pass(score: Score):
+            pass
+
+        @rubric_item(points=10)
+        def test_award_stands_after_a_later_failure(score: Score):
+            score.award(points=4)
+            assert False, "part two broke"
+
+        @rubric_item(points=10)
+        def test_nil_resets(score: Score):
+            score.award()
+            score.nil()
+        """,
+    )
+    t = by_id(results)
+    assert (t["test_full"]["name"], t["test_full"]["score"], t["test_full"]["max"]) == ("Appends in order", 10.0, 10.0)
+    assert t["test_partial"]["score"] == 6.0
+    assert t["test_never_awarded_scores_zero_even_on_pass"]["status"] == "pass"
+    assert t["test_never_awarded_scores_zero_even_on_pass"]["score"] == 0.0
+    later = t["test_award_stands_after_a_later_failure"]
+    assert (later["status"], later["score"]) == ("fail", 4.0)
+    assert t["test_nil_resets"]["score"] == 0.0
+    assert "items" not in t["test_full"]
+    assert results["summary"] == {"score": 20.0, "total": 50.0}
+
+
+def test_awards_outside_the_items_points_are_rejected(pytester):
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+
+        @rubric_item(points=5)
+        def test_too_much(score: Score):
+            score.award(points=6)
+        """,
+    )
+    t = by_id(results)["test_too_much"]
+    assert t["status"] == "fail" and "outside 0..5" in t["output"]
+
+
+RUBRIC = """
+    from pedagog_pytest import Rubric, Score, item, rubric
+
+    class Design(Rubric):
+        memory_safe: Score = item("Passes valgrind with no leaks", points=10)
+        no_globals: Score = item("Avoids global state", points=5)
+        recursion: Score = item("Uses recursion", points=2, extra_credit=True)
+"""
+
+
+def test_rubric_items_nest_under_the_test(pytester):
+    results = run(
+        pytester,
+        RUBRIC
+        + """
+    @rubric(Design)
+    def test_design(scores: Design):
+        scores.memory_safe.award()
+        scores.no_globals.award(points=2.5)
+        scores.recursion.award()
+    """,
+    )
+    t = by_id(results)["test_design"]
+    assert (t["status"], t["score"], t["max"]) == ("pass", 14.5, 15.0)
+    assert t["items"] == [
+        {"id": "memory_safe", "name": "Passes valgrind with no leaks", "score": 10.0, "max": 10.0, "extra-credit": False, "output": ""},
+        {"id": "no_globals", "name": "Avoids global state", "score": 2.5, "max": 5.0, "extra-credit": False, "output": ""},
+        {"id": "recursion", "name": "Uses recursion", "score": 2.0, "max": 2.0, "extra-credit": True, "output": ""},
+    ]
+    assert results["summary"] == {"score": 14.5, "total": 15.0}
+
+
+def test_check_blocks_score_each_item_and_keep_going(pytester):
+    results = run(
+        pytester,
+        RUBRIC
+        + """
+    @rubric(Design)
+    def test_design(scores: Design):
+        with scores.memory_safe.check():
+            assert 1 + 1 == 3, "leaks found"
+        with scores.no_globals.check(points=3):
+            pass
+        scores.recursion.award(points=1)   # still reached after the failed check
+    """,
+    )
+    t = by_id(results)["test_design"]
+    items = {i["id"]: i for i in t["items"]}
+    assert items["memory_safe"]["score"] == 0.0
+    assert "leaks found" in items["memory_safe"]["output"]
+    assert items["no_globals"]["score"] == 3.0
+    assert items["recursion"]["score"] == 1.0
+    assert t["status"] == "fail"
+    assert "rubric checks failed: memory_safe" in t["output"]
+    assert t["score"] == 4.0
+
+
+def test_time_limits_are_not_swallowed_by_checks(pytester):
+    results = run(
+        pytester,
+        """
+        import time
+        from pedagog_pytest import Score, rubric_item, timeout
+
+        @timeout(0.3)
+        @rubric_item(points=2)
+        def test_hangs_in_check(score: Score):
+            with score.check():
+                time.sleep(5)
+        """,
+    )
+    t = by_id(results)["test_hangs_in_check"]
+    assert t["status"] == "fail" and "time limit" in t["output"]
+    assert t["score"] == 0.0
+
+
+def test_conflicting_scoring_decorators_are_a_usage_error(pytester):
+    pytester.makepyfile(
+        test_x="""
+        from pedagog_pytest import rubric_item, weight
+
+        @weight(2)
+        @rubric_item(points=3)
+        def test_x(score):
+            pass
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(["*use only one of*"])
+
+
+def test_scoring_fixtures_need_their_decorator(pytester):
+    results = run(pytester, "def test_x(score):\n    pass\n")
+    t = by_id(results)["test_x"]
+    assert t["status"] == "error" and "needs @rubric_item" in t["output"]
+
+
+def test_rubric_must_declare_items():
+    from pedagog_pytest import Rubric
+
+    with pytest.raises(TypeError, match="declares no items"):
+
+        class Empty(Rubric):
+            pass

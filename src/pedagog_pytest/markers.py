@@ -12,6 +12,8 @@ from typing import Final, overload
 
 import pytest
 
+from .scoring import Rubric
+
 
 class Visibility(str, enum.Enum):
     """When students can see one part of a test's result (its score or its output)."""
@@ -21,7 +23,8 @@ class Visibility(str, enum.Enum):
     HIDDEN = "hidden"
     """Never shown to students."""
     AFTER_END = "after_end"
-    """After the assignment's deadline."""
+    """Once the student can no longer submit: the late deadline if late
+    submissions are allowed, otherwise the due date."""
     AFTER_PUBLISH = "after_publish"
     """When the instructor publishes results."""
 
@@ -53,6 +56,31 @@ def weight(points: float = DEFAULT_WEIGHT) -> pytest.MarkDecorator:
     if points < 0:
         raise ValueError(f"weight must be >= 0, got {points!r}")
     return pytest.mark.pedagog_weight(float(points))
+
+
+def rubric_item(name: str | None = None, points: float = DEFAULT_WEIGHT) -> pytest.MarkDecorator:
+    """Make the test a single rubric item scored through the ``score`` fixture.
+
+    Points come only from ``score.award()`` (or a ``score.check()`` block); a
+    test that never awards scores 0 even if it passes, and awards stand even if
+    it fails afterwards. ``name`` defaults to the test's name (None). Replaces
+    ``@weight``: ``points`` is the test's maximum.
+    """
+    if points < 0:
+        raise ValueError(f"rubric item points must be >= 0, got {points!r}")
+    return pytest.mark.pedagog_rubric_item(name=name, points=float(points))
+
+
+def rubric(cls: type[Rubric]) -> pytest.MarkDecorator:
+    """Score the test by a multi-item ``Rubric``; the ``scores`` fixture is an instance of it.
+
+    The test's maximum is the sum of its non-extra-credit items; extra-credit
+    items add to the score but not the maximum. Replaces ``@weight``.
+    """
+    if not (isinstance(cls, type) and issubclass(cls, Rubric) and cls is not Rubric):
+        raise TypeError(f"@rubric needs a Rubric subclass, got {cls!r}")
+    # with_args: called with a lone class, a mark decorates that class instead.
+    return pytest.mark.pedagog_rubric.with_args(cls)
 
 
 def number(value: str | int) -> pytest.MarkDecorator:
