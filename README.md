@@ -9,22 +9,33 @@ into the assignment image and runs the hidden tests with it.
 ## Writing tests
 
 ```python
-from pedagog_pytest import number, solution_expect, timeout, visibility, weight
+from pedagog_pytest import AFTER_END, HIDDEN, Expect, number, solution_expect, timeout, visibility, weight
 
-@weight(10)                                   # points if it passes (default 1)
-@number("1.1")                                # display number (optional)
-@visibility(score="visible", output="hidden") # default: score visible, output after_end
-@timeout(5)                                   # seconds (default 10; 0 disables)
+@weight(10)                      # points if it passes; default 1.0
+@number("1.1")                   # label and position in the results
+@visibility(output=HIDDEN)       # default: score VISIBLE, output AFTER_END
+@timeout(5)                      # seconds; default 10.0, 0 disables
 def test_append():
-    """Appends one element"""                 # first docstring line is the test name
+    """Appends one element"""   # first docstring line is the test name
     ...
 
-@solution_expect("fail")                      # the reference solution should fail this one
-def test_rejects_bad_input():
+@visibility(AFTER_END)           # one value sets both score and output
+@solution_expect(Expect.FAIL)    # the reference solution is meant to fail this one
+def test_stretch_goal():
     ...
 ```
 
-Visibility values: `visible`, `hidden`, `after_end`, `after_publish`.
+| Decorator | What it's for | Default (undecorated) |
+| --- | --- | --- |
+| `weight(points)` | Points the test is worth: all on pass, 0 otherwise | `1.0` |
+| `number(value)` | Label shown with the test, and its position: results are sorted by number (dotted parts numerically, `1.2` before `1.10`), unnumbered tests last in collection order | none |
+| `visibility(level)` / `visibility(score=, output=)` | When students see the score and the output (failure messages, which can reveal what a test checks) | score `VISIBLE`, output `AFTER_END` |
+| `solution_expect(outcome)` | What the reference solution should do during validation; validation fails on a mismatch | `Expect.PASS` |
+| `timeout(seconds)` | Time limit; a slower test fails (under isolation its process is killed) | `10.0` |
+
+`Visibility` values: `VISIBLE` (immediately), `HIDDEN` (never), `AFTER_END` (after the
+deadline), `AFTER_PUBLISH` (when the instructor publishes results); also exported as module
+constants. The package is typed (`py.typed`, checked with `mypy --strict`).
 
 ## Results
 
