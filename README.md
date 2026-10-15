@@ -143,13 +143,32 @@ can break its own grading, but can't read or run anything in the grader. Combine
 `runner` user (which can't read `/pedagog/tests` or `/pedagog/solution`), student code can't
 see the hidden tests.
 
-## Development
+## Releases
 
-Tests run in containers, no local Python needed:
+Tagging `vX.Y.Z` (matching `pyproject.toml`) builds `pedagog-pytest-X.Y.Z-bundle.tar.gz`, a
+tarball of wheels for this package and all its pinned dependencies (pure Python), and
+attaches it to the GitHub release. pedagog's `pedagog-pytest` addon recipe vends that bundle
+and installs it offline:
 
 ```sh
-podman run --rm -v "$PWD:/src:z" -w /src python:3.12-slim \
-  sh -c 'pip install -q -e . && python -m pytest -q -p no:cacheprovider'
+python3 -m venv --system-site-packages /opt/pedagog/pytest
+/opt/pedagog/pytest/bin/pip install --no-index --find-links wheels/ pedagog-pytest
+```
+
+`/pedagog/bin/run-tests` (the `pedagog-run-tests` entry point) is the root launcher pedagog
+calls; see `src/pedagog_pytest/launcher.py`. PyPI publishing is wired but off until trusted
+publishing is configured (`PYPI_PUBLISH` repository variable).
+
+## Development
+
+Tests run in containers, no local Python needed. The launcher tests need root and the
+`grader`/`runner` users (skipped otherwise):
+
+```sh
+podman run --rm -v "$PWD:/src:z" -w /src python:3.12-slim sh -c '
+  useradd -r -M -u 900 grader && useradd -r -M -u 901 runner &&
+  pip install -q -e . && cp -r /src /tmp/w && cd /tmp/w &&
+  python -m pytest -q -p no:cacheprovider'
 ```
 
 ## License

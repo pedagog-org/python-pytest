@@ -302,3 +302,28 @@ def test_oversized_replies_are_refused(pytester, runner):
         """,
     )
     assert_all_pass(results, "test_refused")
+
+
+def test_student_errors_are_reported_without_rpyc_internals(pytester, runner):
+    runner(buggy="def divide(a, b):\n    return helper(a, b)\n\ndef helper(a, b):\n    return a / b\n")
+    results = run(
+        pytester,
+        """
+        import pytest
+        from buggy import divide
+
+        def test_type_is_preserved():
+            with pytest.raises(ZeroDivisionError):
+                divide(1, 0)
+
+        def test_failure_output_is_clean():
+            divide(1, 0)
+        """,
+    )
+    assert results["test_type_is_preserved"]["status"] == "pass"
+    output = results["test_failure_output_is_clean"]["output"]
+    assert "E       ZeroDivisionError: division by zero" in output
+    assert "rpyc" not in output and "protocol.py" not in output and "client.py" not in output
+    assert "Derived" not in output
+    if sys.version_info >= (3, 11):  # notes need 3.11
+        assert 'File "buggy.py", line 5, in helper' in output

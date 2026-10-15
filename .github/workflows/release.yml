@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Oldest supported Python, so its backport wheels land in the bundle.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Check the tag matches the package version
+        run: |
+          version=$(python -c 'import re; print(re.search(r"^version = \"([^\"]+)\"", open("pyproject.toml").read(), re.M).group(1))')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+      - run: pip install --upgrade pip
+      - run: sh scripts/build-bundle.sh dist
+      - run: pip wheel --no-deps --wheel-dir dist .
+      - name: Create the GitHub release with the bundle (vended by pedagog recipes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*-bundle.tar.gz dist/pedagog_pytest-*.whl --title "$GITHUB_REF_NAME" --generate-notes
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/pedagog_pytest-*.whl
+
+  # Off until PyPI trusted publishing is configured for this repo
+  # (then set the repository variable PYPI_PUBLISH=true).
+  pypi:
+    needs: bundle
+    if: vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
