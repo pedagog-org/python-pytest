@@ -16,8 +16,10 @@ A hostile student process can therefore only break its own grading.
 
 from __future__ import annotations
 
+import builtins
 import importlib.abc
 import importlib.machinery
+import re
 import sys
 import threading
 import types
@@ -46,6 +48,52 @@ GRADER_CONFIG: dict[str, object] = {
 
 class IsolationError(Exception):
     """Something can't be done across the process boundary."""
+
+
+def _student_frames(remote_tb: str) -> str:
+    """The parts of a remote traceback that are student code (not rpyc or
+    pedagog_pytest internals, which live in site-packages)."""
+    kept: list[str] = []
+    keep = False
+    for line in remote_tb.splitlines():
+        if line.startswith('  File "'):
+            keep = "site-packages" not in line and "<frozen" not in line
+        elif not line.startswith("    "):
+            keep = False
+        if keep:
+            # Paths relative to the student's code, not the launcher's scratch dir.
+            kept.append(re.sub(r'File ".*?/code/', 'File "', line))
+    return "\n".join(kept)
+
+
+def _clean(error: Exception) -> Exception:
+    """Re-create an error from student code without rpyc's wrapping: same
+    type and message, plus only the student's own frames."""
+    remote_tb = getattr(error, "_remote_tb", None)
+    if remote_tb is None:
+        return error
+    args = error.args[:1] if error.args else ()
+    # rpyc wraps builtin exceptions in a generated subclass; use the real type.
+    # (Its __module__ claims "builtins", so match the actual builtin object.)
+    kind = next((c for c in type(error).__mro__ if getattr(builtins, c.__name__, None) is c), Exception)
+    try:
+        clean = kind(*args)
+    except Exception:
+        return error
+    frames = _student_frames(remote_tb if isinstance(remote_tb, str) else "".join(remote_tb))
+    if frames and hasattr(clean, "add_note"):
+        clean.add_note("student code traceback:\n" + frames)
+    return cast(Exception, clean)
+
+
+def _remote(method: Callable[..., Any], *args: object) -> Any:
+    __tracebackhide__ = True
+    try:
+        return method(*args)
+    except EOFError:
+        raise
+    except Exception as e:
+        raise _clean(e) from None
 
 
 # Larger plain-data replies are refused before decoding, so student code can't
@@ -122,8 +170,9 @@ def _active() -> Session:
 
 
 def _op(name: str, *args: object) -> Any:
+    __tracebackhide__ = True
     session = _active()
-    return session.unpack(session.root.op(name, session.pack(args)))
+    return session.unpack(_remote(session.root.op, name, session.pack(args)))
 
 
 class Proxy:
@@ -143,18 +192,21 @@ class Proxy:
         return self._pedagog_id
 
     def __getattr__(self, name: str) -> Any:
+        __tracebackhide__ = True
         if name.startswith("_pedagog"):
             raise AttributeError(name)
         session = _active()
-        return session.unpack(session.root.getattr(self._pedagog_handle(), name))
+        return session.unpack(_remote(session.root.getattr, self._pedagog_handle(), name))
 
     def __setattr__(self, name: str, value: object) -> None:
+        __tracebackhide__ = True
         session = _active()
-        session.root.setattr(self._pedagog_handle(), name, session.pack(value))
+        _remote(session.root.setattr, self._pedagog_handle(), name, session.pack(value))
 
     def __call__(self, *args: object, **kwargs: object) -> Any:
+        __tracebackhide__ = True
         session = _active()
-        return session.unpack(session.root.call(self._pedagog_handle(), session.pack((list(args), kwargs))))
+        return session.unpack(_remote(session.root.call, self._pedagog_handle(), session.pack((list(args), kwargs))))
 
     def __repr__(self) -> str:
         return cast(str, _op("repr", self))
@@ -204,9 +256,11 @@ _BinaryOp = Callable[[Proxy, object], Any]
 
 def _binary(name: str) -> tuple[_BinaryOp, _BinaryOp]:
     def forward(self: Proxy, other: object) -> Any:
+        __tracebackhide__ = True
         return _op(name, self, other)
 
     def reflected(self: Proxy, other: object) -> Any:
+        __tracebackhide__ = True
         return _op(name, other, self)
 
     return forward, reflected
