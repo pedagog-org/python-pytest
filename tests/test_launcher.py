@@ -322,3 +322,50 @@ def test_student_code_cannot_cheat_or_interfere(assignment):
     # Nothing of the runner's outlives the launcher.
     leftover = subprocess.run(["sh", "-c", "ps -u runner -o pid= | wc -l"], capture_output=True, text=True)
     assert leftover.stdout.strip() == "0"
+
+
+# Stands in for a container PID 1 that never reaps: orphans come here and stay
+# zombies. Prints how many processes the given uid still has afterwards.
+NON_REAPING_INIT = """
+import ctypes, os, subprocess, sys
+ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+subprocess.run(sys.argv[2:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+left = 0
+for entry in os.listdir("/proc"):
+    try:
+        left += entry.isdigit() and os.stat(f"/proc/{entry}").st_uid == int(sys.argv[1])
+    except FileNotFoundError:
+        pass
+print(left)
+"""
+
+
+def test_nothing_the_runner_started_outlives_the_launcher(assignment):
+    """Not even as zombies, whatever the container's PID 1 does."""
+    tests, code, results = assignment(
+        """
+        from lingerer import linger
+
+        def test_leaves_processes_behind():
+            linger()
+        """,
+        {"lingerer": """
+            import os, time
+
+            def linger():
+                for detach in (False, True):
+                    if os.fork() == 0:
+                        if detach:
+                            os.setsid()
+                        time.sleep(120)
+                        os._exit(0)
+        """},
+    )
+    launcher = [sys.executable, "-m", "pedagog_pytest.launcher", "--code", str(code), "--tests", str(tests),
+                "--results", str(results)]
+    proc = subprocess.run(
+        [sys.executable, "-c", NON_REAPING_INIT, str(pwd.getpwnam("runner").pw_uid), *launcher],
+        capture_output=True, text=True, check=True,
+    )
+    assert outcomes(results)["test_leaves_processes_behind"]["status"] == "pass"
+    assert proc.stdout.strip() == "0"

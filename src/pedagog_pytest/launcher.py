@@ -25,6 +25,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .isolation.server import _become_subreaper
+
 GRADER_USER = "grader"
 RUNNER_USER = "runner"
 RESULTS_URL_ENV = "PEDAGOG_RESULTS_URL"
@@ -33,6 +35,7 @@ SOCKET_WAIT_SECONDS = 15
 RUNNER_MAX_PROCS = 64
 # Only these reach the children; everything else (notably the results URL) stays here.
 PASSTHROUGH_ENV = ("PATH", "LANG", "LC_ALL", "TZ")
+REAP_SECONDS = 5.0
 
 
 class LaunchError(Exception):
@@ -83,6 +86,8 @@ def _start_runner(work: Path, code: Path) -> tuple[subprocess.Popen[bytes], Path
         sys.executable, "-m", "pedagog_pytest.isolation.server", "--socket", str(sock), "--code", str(code),
         "--sweep", "--max-procs", str(RUNNER_MAX_PROCS),
     ]
+    # Runner processes orphaned when it's stopped come to us to be reaped.
+    _become_subreaper()
     # Student output goes nowhere, so it can't flood the run's logs.
     proc = subprocess.Popen(
         cmd,
@@ -112,6 +117,21 @@ def _stop(proc: subprocess.Popen[bytes]) -> None:
         env=_clean_env(Path("/")),
         check=False,
     )
+    _reap_orphans()
+
+
+def _reap_orphans() -> None:
+    """Collect the killed runner processes re-parented to us, so none linger as
+    zombies (a container's PID 1 may never reap them, and they'd still count
+    against the runner's process limit)."""
+    deadline = time.monotonic() + REAP_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            time.sleep(0.01)
 
 
 def _upload(path: Path, url: str) -> None:
