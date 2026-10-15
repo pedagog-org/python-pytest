@@ -340,7 +340,8 @@ print(left)
 """
 
 
-def test_nothing_the_runner_started_outlives_the_launcher(assignment):
+@pytest.mark.parametrize("isolation, user", [("process", "runner"), ("in-process", "grader")])
+def test_nothing_student_code_started_outlives_the_launcher(assignment, isolation, user):
     """Not even as zombies, whatever the container's PID 1 does."""
     tests, code, results = assignment(
         """
@@ -362,9 +363,9 @@ def test_nothing_the_runner_started_outlives_the_launcher(assignment):
         """},
     )
     launcher = [sys.executable, "-m", "pedagog_pytest.launcher", "--code", str(code), "--tests", str(tests),
-                "--results", str(results)]
+                "--results", str(results), "--isolation", isolation]
     proc = subprocess.run(
-        [sys.executable, "-c", NON_REAPING_INIT, str(pwd.getpwnam("runner").pw_uid), *launcher],
+        [sys.executable, "-c", NON_REAPING_INIT, str(pwd.getpwnam(user).pw_uid), *launcher],
         capture_output=True, text=True, check=True,
     )
     assert outcomes(results)["test_leaves_processes_behind"]["status"] == "pass"

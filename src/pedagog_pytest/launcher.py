@@ -86,8 +86,6 @@ def _start_runner(work: Path, code: Path) -> tuple[subprocess.Popen[bytes], Path
         sys.executable, "-m", "pedagog_pytest.isolation.server", "--socket", str(sock), "--code", str(code),
         "--sweep", "--max-procs", str(RUNNER_MAX_PROCS),
     ]
-    # Runner processes orphaned when it's stopped come to us to be reaped.
-    _become_subreaper()
     # Student output goes nowhere, so it can't flood the run's logs.
     proc = subprocess.Popen(
         cmd,
@@ -110,20 +108,23 @@ def _stop(proc: subprocess.Popen[bytes]) -> None:
     except ProcessLookupError:
         pass
     proc.wait()
-    # Anything student code started that escaped the process group: kill every
-    # remaining runner process (kill(-1) as runner spares only the caller).
+    # Anything student code started that escaped the process group.
+    _kill_all(RUNNER_USER)
+
+
+def _kill_all(user: str) -> None:
+    """Kill every process of ``user`` (kill(-1) as that user spares only the caller)."""
     subprocess.run(
-        _as(RUNNER_USER) + [sys.executable, "-c", "import os, signal\ntry:\n os.kill(-1, signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
+        _as(user) + [sys.executable, "-c", "import os, signal\ntry:\n os.kill(-1, signal.SIGKILL)\nexcept ProcessLookupError:\n pass"],
         env=_clean_env(Path("/")),
         check=False,
     )
-    _reap_orphans()
 
 
 def _reap_orphans() -> None:
-    """Collect the killed runner processes re-parented to us, so none linger as
-    zombies (a container's PID 1 may never reap them, and they'd still count
-    against the runner's process limit)."""
+    """Collect the killed processes re-parented to us, so none linger as zombies
+    (a container's PID 1 may never reap them, and they'd still count against
+    their user's process limit)."""
     deadline = time.monotonic() + REAP_SECONDS
     while time.monotonic() < deadline:
         try:
@@ -153,6 +154,8 @@ def run(code: Path, tests: Path, results: Path, isolation: str, pytest_args: lis
     if not code.is_dir():
         raise LaunchError(f"no code to test at {code}")
 
+    # Processes orphaned during the run come to us, to be killed and reaped.
+    _become_subreaper()
     work = Path(tempfile.mkdtemp(prefix="pedagog-run-"))
     os.chmod(work, 0o755)
     runner = None
@@ -185,6 +188,9 @@ def run(code: Path, tests: Path, results: Path, isolation: str, pytest_args: lis
     finally:
         if runner is not None:
             _stop(runner)
+        # Nothing may outlive the run: in-process, student code runs as grader.
+        _kill_all(GRADER_USER)
+        _reap_orphans()
         shutil.rmtree(work, ignore_errors=True)
 
     produced = results / "results.yaml"
