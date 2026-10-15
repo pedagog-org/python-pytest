@@ -8,94 +8,140 @@ into the assignment image and runs the hidden tests with it.
 
 ## Writing tests
 
-```python
-from pedagog_pytest import AFTER_END, HIDDEN, Expect, number, solution_expect, timeout, visibility, weight
+Points come only from rubric scoring: a test decorated with `@rubric_item` (one item) or
+`@rubric` (several) awards them explicitly. An undecorated test is pass/fail only and
+scores 0 of 0.
 
-@weight(10)                      # points if it passes; default 1.0
+```python
+from pedagog_pytest import AFTER_END, HIDDEN, Expect, Score, number, rubric_item, solution_expect, timeout, visibility
+
+@rubric_item("Appends one element", points=10, id="append")   # see Rubrics
 @number("1.1")                   # label and position in the results
 @visibility(output=HIDDEN)       # default: score VISIBLE, output AFTER_END
 @timeout(5)                      # seconds; default 10.0, 0 disables
-def test_append():
-    """Appends one element"""   # first docstring line is the test name
+def test_append(score: Score):
     ...
+    score.award()                # all 10 points (only reached if the asserts above pass)
 
 @visibility(AFTER_END)           # one value sets both score and output
 @solution_expect(Expect.FAIL)    # the reference solution is meant to fail this one
 def test_stretch_goal():
+    """Reverses in place"""      # first docstring line is the test name
     ...
 ```
 
 | Decorator | What it's for | Default (undecorated) |
 | --- | --- | --- |
-| `weight(points)` | Points the test is worth: all on pass, 0 otherwise | `1.0` |
+| `rubric_item(name, points, *, id, clamp, extra_credit)` | The test is one rubric item, scored through the `score` fixture | pass/fail only, 0 points |
+| `rubric(Rubric, *, id, name)` | The test is scored by several items, through the `scores` fixture | pass/fail only, 0 points |
 | `number(value)` | Label shown with the test, and its position: results are sorted by number (dotted parts numerically, `1.2` before `1.10`), unnumbered tests last in collection order | none |
-| `visibility(level)` / `visibility(score=, output=)` | When students see the score and the output (failure messages, which can reveal what a test checks) | score `VISIBLE`, output `AFTER_END` |
+| `visibility(level)` / `visibility(score=, output=)` | When students see the score and the output (failure messages and feedback, which can reveal what a test checks) | score `VISIBLE`, output `AFTER_END` |
 | `solution_expect(outcome)` | What the reference solution should do during validation; validation fails on a mismatch | `Expect.PASS` |
 | `timeout(seconds)` | Time limit; a slower test fails (under isolation its process is killed) | `10.0` |
-| `rubric_item(name, points)` / `rubric(Rubric)` | Partial credit: the test awards points itself (see Rubrics) | — |
 
 `Visibility` values: `VISIBLE` (immediately), `HIDDEN` (never), `AFTER_END` (once the student
 can no longer submit: the late deadline if late submissions are allowed, otherwise the due
 date), `AFTER_PUBLISH` (when the instructor publishes results); also exported as module
 constants. The package is typed (`py.typed`, checked with `mypy --strict`).
 
-## Rubrics (partial credit)
+## Rubrics
 
-Instead of all-or-nothing `@weight`, a test can award points itself. An item that's never
-awarded scores 0 (even if the test passes), and awards stand even if the test fails
-afterwards: status and score are independent.
+An item that's never awarded scores 0, even if the test passes. Awards add up and stand even
+if the test fails afterwards, so a failing assert simply stops later awards.
 
-**One item** — `@rubric_item` and the `score` fixture:
+**One item:** `@rubric_item` and the `score` fixture.
 
 ```python
 from pedagog_pytest import Score, rubric_item
 
-@rubric_item("Appends in order", points=10)   # name defaults to the test's name
-def test_append(score: Score):
-    score.award()                # points=FULL: all 10
-    check_edge_cases()
-    score.award(points=6)        # replaces the earlier award
+@rubric_item("len counts elements", points=2, id="len")
+def test_len(score: Score):
+    assert len(make_list(0)) == 0
+    score.award(1, reason="empty list")
+    assert len(make_list(3)) == 3      # if this fails, the student keeps 1 of 2
+    score.award(1, reason="three items")
 ```
 
-**Several items** — a `Rubric` subclass (attribute names are the item ids), `@rubric`, and
-the `scores` fixture, which is an instance of your rubric:
+**Several items:** a `Rubric` subclass, `@rubric`, and the `scores` fixture (an instance of
+your rubric).
 
 ```python
-from pedagog_pytest import Rubric, Score, item, rubric
+from pedagog_pytest import ExtraCredit, Rubric, Score, item, rubric
 
-class Design(Rubric):
-    memory_safe: Score = item("Passes valgrind with no leaks", points=10)
-    no_globals: Score = item("Avoids global state", points=5)
-    recursion: Score = item("Uses recursion", points=2, extra_credit=True)
+class Sorting(Rubric):
+    correct: Score = item("sorts correctly", points=4)
+    stable: Score = item("keeps equal elements in order", points=1, extra_credit=ExtraCredit.BONUS)
+    reverse: Score = item("sorts descending", points=2, extra_credit=ExtraCredit.ATTEMPTED_WORK)
+    late: Score = item("late-file penalty", clamp=(None, 0))
 
-@rubric(Design)
-def test_design(scores: Design):
-    with scores.memory_safe.check():   # full points if the block completes;
-        assert leaks() == 0            #   0 plus the failure recorded if it raises
-    with scores.no_globals.check(points=3):
-        assert not uses_globals()
-    scores.recursion.award(points=1)   # still runs after a failed check
+@rubric(Sorting, id="sort", name="sort()")
+def test_sort(scores: Sorting):
+    with scores.correct.check(points=1, reason="empty list"):
+        assert sort([]) == []
+    with scores.correct.check(points=3, reason="1000 random values"):
+        assert sort(data) == sorted(data)
+    if hasattr(student, "sort_descending"):
+        scores.reverse.attempt()
+    ...
 ```
 
-- `Score.award(points=FULL)` sets the item's points (0..its points); `Score.nil()` resets to 0.
-- `Score.check(points=FULL)` is a soft assertion: a failing block doesn't stop the test, but
-  the test ends as failed, listing the failed items. Time limits still stop it.
-- A rubric test's maximum is the sum of its non-extra-credit items; extra credit adds to the
-  score but not the maximum. In results.yaml its items appear under `items:` with their own
-  score, max, `extra-credit` flag and failure output.
-- `@weight`, `@rubric_item` and `@rubric` are mutually exclusive.
+- **Scoring calls** (on any `Score`):
+  - `award(points=FULL, reason=None)` adds points (negative to deduct); `FULL` adds the rest
+    of the item's points.
+  - `set(points, reason=None)` replaces the running total (for computed scores).
+  - `nil()` resets the item: no points, no feedback, not attempted.
+  - `check(points=FULL, reason=None)` adds `points` if its block completes. If the block
+    raises (including `pytest.raises`' "DID NOT RAISE"), it adds nothing and records the
+    failure, and the test carries on but ends as failed. Time limits still stop it.
+  - `attempt()` marks an `ATTEMPTED_WORK` item attempted without points.
+- **Items:** `item(name=None, points=0, *, id=None, clamp=(0, FULL), extra_credit=NONE)`.
+  The id defaults to the attribute name and the name to the id; item ids must be unique.
+- **Clamp** bounds the item's *final* total, so awards and deductions commute. `FULL` is the
+  item's points, `None` leaves a side unbounded, and `clamp=None` leaves both.
+- **Extra credit:** `NONE` counts in the score and the max; `BONUS` counts in the score
+  only; `ATTEMPTED_WORK` counts in the max only once attempted (any points awarded, or
+  `attempt()`).
+- **Ids:** `id=` on `@rubric_item` / `@rubric` is the test's stable id (parametrized cases
+  get `id[param]`); duplicates are a usage error. Tests without one have no id.
+- `@rubric_item` and `@rubric` are mutually exclusive.
+
+**Feedback** (shown to students, subject to *output* visibility) reads as a checklist:
+
+```text
+✓ +1 empty list
+✗ +0 1000 random values (worth 3)
+  test_sort.py:12: AssertionError: assert [3, 1, 2] == [1, 2, 3]
++1 first 10 elements correct
+```
+
+**Grading trace** (for instructors only): every test's results entry has a `trace` that
+explains its score step by step, and the same trace is printed at the end of the run:
+
+```text
+sort — sort() (rubric Sorting)
+  correct  points 4, clamp [0, 4], none
+    check ✓ +1  empty list  = 1
+    check ✗ +0  1000 random values (worth 3): AssertionError  = 1
+    final 1  -> 1 / 4
+  ...
+  test: 1 + 0 + 0 + 0 = 1;  max 4 + 0 + 0 + 0 = 4  -> 1 / 4
+  status: fail (checks failed: correct)
+```
 
 ## Results
 
 When `PEDAGOG_RESULTS_DIR` is set (pedagog sets it), or with `--pedagog-results PATH`, the
 plugin writes `results.yaml` (as JSON, which is valid YAML):
 
-- one entry per test: `id` (pytest node id), `name`, `status` (`pass`/`fail`/`error`/`skip`),
-  `score` (full weight on pass, else 0), `max`, `output` (failure text), `visibility`, and
-  optional `number` / `solution-expect`;
+- one entry per test: `id` (only if declared), `node` (pytest node id), `name`, `status`
+  (`pass`/`fail`/`error`/`skip`), `score`, `max`, `output` (pytest's failure text),
+  `feedback`, `trace`, `visibility`, and optional `number` / `solution-expect`;
+- `@rubric_item` tests add `clamp`, `extra-credit` and `attempted`; `@rubric` tests list
+  their `items` (`id`, `name`, `score`, `max`, `clamp`, `extra-credit`, `attempted`,
+  `feedback`);
 - a module that fails to import (e.g. broken student code) becomes an `error` entry, so a
   run never passes vacuously;
-- `summary` totals the scores.
+- `summary` totals the scores and maxes.
 
 Plain `pytest` runs without either setting write nothing.
 

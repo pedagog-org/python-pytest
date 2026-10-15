@@ -6,7 +6,6 @@ from .markers import (
     DEFAULT_OUTPUT_VISIBILITY,
     DEFAULT_SCORE_VISIBILITY,
     DEFAULT_TIMEOUT,
-    DEFAULT_WEIGHT,
     HIDDEN,
     VISIBLE,
     Expect,
@@ -17,12 +16,13 @@ from .markers import (
     solution_expect,
     timeout,
     visibility,
-    weight,
 )
 
-from .scoring import FULL, Full, Rubric, Score, item
+from .scoring import DEFAULT_CLAMP, FULL, ExtraCredit, Full, Rubric, Score, item
 
 __all__ = [
+    "DEFAULT_CLAMP",
+    "ExtraCredit",
     "FULL",
     "Full",
     "Rubric",
@@ -35,7 +35,6 @@ __all__ = [
     "DEFAULT_OUTPUT_VISIBILITY",
     "DEFAULT_SCORE_VISIBILITY",
     "DEFAULT_TIMEOUT",
-    "DEFAULT_WEIGHT",
     "HIDDEN",
     "VISIBLE",
     "Expect",
@@ -44,5 +43,4 @@ __all__ = [
     "solution_expect",
     "timeout",
     "visibility",
-    "weight",
 ]

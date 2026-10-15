@@ -76,7 +76,7 @@ def launch(tests: Path, code: Path, results: Path, *args: str, env: dict | None 
 
 def outcomes(results: Path) -> dict:
     doc = json.loads((results / "results.yaml").read_text())
-    return {t["id"].split("::")[-1]: t for t in doc["tests"]}
+    return {t["node"].split("::")[-1]: t for t in doc["tests"]}
 
 
 SNOOP = """

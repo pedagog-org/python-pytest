@@ -1,4 +1,4 @@
-"""pytest plugin: per-test time limits and pedagog's results.yaml.
+"""pytest plugin: per-test time limits, rubric scoring, and pedagog's results.yaml.
 
 Registered through the ``pytest11`` entry point, so installing the package is
 enough. Results are only written under pedagog (``PEDAGOG_RESULTS_DIR`` set) or
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
-from .scoring import Rubric, Score
+from .scoring import Rubric, Score, describe_failure
 
 if TYPE_CHECKING:
     from .isolation.client import StudentFinder
@@ -29,7 +29,6 @@ from .markers import (
     DEFAULT_OUTPUT_VISIBILITY,
     DEFAULT_SCORE_VISIBILITY,
     DEFAULT_TIMEOUT,
-    DEFAULT_WEIGHT,
     Expect,
     Visibility,
 )
@@ -44,18 +43,21 @@ COLLECTION_TIMEOUT: Final = 60.0
 MAX_OUTPUT_CHARS: Final = 20_000
 
 MARKERS: Final = (
-    "pedagog_weight(points): points awarded when the test passes",
     "pedagog_number(value): label and sort position in the results",
     "pedagog_visibility(score, output): when students see score/output",
     "pedagog_solution_expect(outcome): expected reference-solution outcome",
     "pedagog_timeout(seconds): per-test time limit",
-    "pedagog_rubric_item(name, points): single rubric item scored via the score fixture",
-    "pedagog_rubric(cls): multi-item rubric scored via the scores fixture",
+    "pedagog_rubric_item(id, name, points, clamp, extra_credit): one rubric item, scored via the score fixture",
+    "pedagog_rubric(cls, id, name): multi-item rubric, scored via the scores fixture",
 )
 
 SCORE_KEY: Final = pytest.StashKey[Score]()
 SCORES_KEY: Final = pytest.StashKey[Rubric]()
-SCORING_MARKS: Final = ("pedagog_weight", "pedagog_rubric_item", "pedagog_rubric")
+SCORING_MARKS: Final = ("pedagog_rubric_item", "pedagog_rubric")
+# The test's first failure, described for students and the grading trace.
+FAILURE_KEY: Final = pytest.StashKey[str]()
+# Ids of the items whose check() blocks failed (the reason the test failed).
+FAILED_CHECKS_KEY: Final = pytest.StashKey[list[str]]()
 
 
 class TestTimeout(BaseException):
@@ -108,23 +110,72 @@ def _timeout_for(item: pytest.Item) -> float:
     return float(_mark_arg(item, "pedagog_timeout", item.config.getoption("--pedagog-timeout")))
 
 
+def _scoring_mark(item: pytest.Item) -> pytest.Mark | None:
+    return item.get_closest_marker("pedagog_rubric_item") or item.get_closest_marker("pedagog_rubric")
+
+
+def _declared_id(item: pytest.Item) -> str | None:
+    """The test's stable id, if declared; parametrized cases get ``id[param]``."""
+    mark = _scoring_mark(item)
+    declared: str | None = mark.kwargs.get("id") if mark is not None else None
+    callspec = getattr(item, "callspec", None)
+    if declared is not None and callspec is not None:
+        return f"{declared}[{callspec.id}]"
+    return declared
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    seen: dict[str, str] = {}
     for item in items:
         used = [m for m in SCORING_MARKS if item.get_closest_marker(m) is not None]
         if len(used) > 1:
             names = ", ".join("@" + m.removeprefix("pedagog_") for m in used)
             raise pytest.UsageError(f"{item.nodeid}: use only one of {names}")
+        declared = _declared_id(item)
+        if declared is not None:
+            if declared in seen:
+                raise pytest.UsageError(f"{item.nodeid}: id {declared!r} is already used by {seen[declared]}")
+            seen[declared] = item.nodeid
+
+
+def _new_scores(item: pytest.Item) -> tuple[Score | None, Rubric | None]:
+    single = item.get_closest_marker("pedagog_rubric_item")
+    if single is not None:
+        kw = single.kwargs
+        name = kw["name"] or _display_name(item)
+        found = Score(_declared_id(item) or item.name, name, kw["points"], kw["clamp"], kw["extra_credit"])
+        found.root = item.config.rootpath
+        return found, None
+    multi = item.get_closest_marker("pedagog_rubric")
+    if multi is not None:
+        rubric: Rubric = multi.args[0]()
+        for s in rubric.items():
+            s.root = item.config.rootpath
+        return None, rubric
+    return None, None
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    single = item.get_closest_marker("pedagog_rubric_item")
+    single, multi = _new_scores(item)
     if single is not None:
-        name = single.kwargs["name"] or _display_name(item)
-        item.stash[SCORE_KEY] = Score(item.name, name, single.kwargs["points"])
-    multi = item.get_closest_marker("pedagog_rubric")
+        item.stash[SCORE_KEY] = single
     if multi is not None:
-        item.stash[SCORES_KEY] = multi.args[0]()
+        item.stash[SCORES_KEY] = multi
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    excinfo = call.excinfo
+    if (
+        excinfo is not None
+        and FAILURE_KEY not in item.stash
+        and FAILED_CHECKS_KEY not in item.stash
+        and not excinfo.errisinstance(pytest.skip.Exception)
+    ):
+        item.stash[FAILURE_KEY] = describe_failure(excinfo.value, item.config.rootpath)
+    return report
 
 
 @pytest.fixture
@@ -152,8 +203,9 @@ def _item_scores(item: pytest.Item) -> list[Score]:
 
 
 def _fail_on_failed_checks(item: pytest.Item) -> None:
-    failed = [s.id for s in _item_scores(item) if s.failures]
+    failed = [s.id for s in _item_scores(item) if s.failed_checks]
     if failed:
+        item.stash[FAILED_CHECKS_KEY] = failed
         pytest.fail(f"rubric checks failed: {', '.join(failed)}", pytrace=False)
 
 
@@ -239,26 +291,38 @@ class IsolationPlugin:
             sys.meta_path.remove(self.finder)
 
 
+def _num(x: float) -> str:
+    return f"{x:g}"
+
+
+def _sum(values: list[float]) -> str:
+    return " + ".join(_num(v) for v in values).replace("+ -", "- ") or "0"
+
+
 @dataclass
 class _Entry:
-    id: str
+    node: str
     name: str
     order: int
-    max: float = DEFAULT_WEIGHT
+    declared_id: str | None = None
     number: str | None = None
     score_visibility: Visibility = DEFAULT_SCORE_VISIBILITY
     output_visibility: Visibility = DEFAULT_OUTPUT_VISIBILITY
     solution_expect: Expect | None = None
-    # "weight": all of max on pass; "item": one rubric item; "rubric": several.
-    scoring: str = "weight"
+    # "none": pass/fail only (0 points); "item": one rubric item; "rubric": several.
+    scoring: str = "none"
+    rubric_name: str | None = None
     scores: list[Score] = field(default_factory=list)
     status: str = "pass"
     output: list[str] = field(default_factory=list)
+    failure: str | None = None
+    failed_checks: list[str] = field(default_factory=list)
 
     def earned(self) -> float:
-        if self.scoring == "weight":
-            return self.max if self.status == "pass" else 0.0
-        return sum(s.awarded for s in self.scores)
+        return sum(s.final for s in self.scores)
+
+    def max(self) -> float:
+        return sum(s.max for s in self.scores)
 
     def sort_key(self) -> tuple[int, tuple[tuple[int, int | str], ...], int]:
         """Numbered entries first, by dotted parts (numeric parts compared as
@@ -268,29 +332,81 @@ class _Entry:
         parts = tuple((0, int(p)) if p.isdigit() else (1, p) for p in self.number.split("."))
         return (0, parts, self.order)
 
+    def feedback(self) -> str:
+        """What the student is told (subject to output visibility)."""
+        if self.scoring == "none":
+            return ""
+        lines = [self.scores[0].feedback()] if self.scoring == "item" else []
+        if self.failure is not None and self.status in ("fail", "error"):
+            first, *rest = self.failure.splitlines()
+            lines.append("\n".join(["✗ " + first, *("  " + line for line in rest)]))
+        return "\n".join(line for line in lines if line)
+
+    def status_reason(self) -> str:
+        if self.status in ("pass", "skip"):
+            return self.status
+        if self.failed_checks:
+            return f"{self.status} (checks failed: {', '.join(self.failed_checks)})"
+        if self.failure is not None:
+            return f"{self.status} ({self.failure.splitlines()[0]})"
+        return self.status
+
+    def trace(self) -> str:
+        """How the test's score was calculated (for instructors only)."""
+        title = f"{self.declared_id or self.node} — {self.name}"
+        if self.scoring == "item":
+            lines = [f"{title} (rubric item: {self.scores[0].header()})"]
+            lines += ["  " + line for line in self.scores[0].trace()]
+        elif self.scoring == "rubric":
+            lines = [f"{title} (rubric {self.rubric_name})"]
+            for s in self.scores:
+                lines.append(f"  {s.id}  {s.header()}")
+                lines += ["    " + line for line in s.trace()]
+            earned, maximum = self.earned(), self.max()
+            lines.append(
+                f"  test: {_sum([s.final for s in self.scores])} = {_num(earned)};  "
+                f"max {_sum([s.max for s in self.scores])} = {_num(maximum)}  -> {_num(earned)} / {_num(maximum)}"
+            )
+        else:
+            lines = [f"{title} (unscored: 0 / 0)"]
+        lines.append(f"  status: {self.status_reason()}")
+        return "\n".join(lines)
+
     def to_doc(self) -> dict[str, object]:
-        doc: dict[str, object] = {
-            "id": self.id,
-            "name": self.name,
-            "status": self.status,
-            "score": self.earned(),
-            "max": self.max,
-            "output": "\n".join(self.output)[:MAX_OUTPUT_CHARS],
-            "visibility": {"score": self.score_visibility.value, "output": self.output_visibility.value},
-        }
+        doc: dict[str, object] = {}
+        if self.declared_id is not None:
+            doc["id"] = self.declared_id
+        doc.update(
+            {
+                "node": self.node,
+                "name": self.name,
+                "status": self.status,
+                "score": self.earned(),
+                "max": self.max(),
+                "output": "\n".join(self.output)[:MAX_OUTPUT_CHARS],
+                "feedback": self.feedback()[:MAX_OUTPUT_CHARS],
+                "trace": self.trace()[:MAX_OUTPUT_CHARS],
+                "visibility": {"score": self.score_visibility.value, "output": self.output_visibility.value},
+            }
+        )
         if self.number is not None:
             doc["number"] = self.number
         if self.solution_expect is not None:
             doc["solution-expect"] = self.solution_expect.value
-        if self.scoring == "rubric":
+        if self.scoring == "item":
+            only = self.scores[0]
+            doc.update({"clamp": list(only.bounds), "extra-credit": only.extra_credit.value, "attempted": only.attempted})
+        elif self.scoring == "rubric":
             doc["items"] = [
                 {
                     "id": s.id,
                     "name": s.name,
-                    "score": s.awarded,
+                    "score": s.final,
                     "max": s.points,
-                    "extra-credit": s.extra_credit,
-                    "output": "\n".join(s.failures)[:MAX_OUTPUT_CHARS],
+                    "clamp": list(s.bounds),
+                    "extra-credit": s.extra_credit.value,
+                    "attempted": s.attempted,
+                    "feedback": s.feedback()[:MAX_OUTPUT_CHARS],
                 }
                 for s in self.scores
             ]
@@ -319,26 +435,16 @@ class ResultsRecorder:
 
     def pytest_itemcollected(self, item: pytest.Item) -> None:
         vis = item.get_closest_marker("pedagog_visibility")
-        single = item.get_closest_marker("pedagog_rubric_item")
-        multi = item.get_closest_marker("pedagog_rubric")
-        if single is not None:
-            scoring, maximum = "item", float(single.kwargs["points"])
-            scores = [Score(item.name, single.kwargs["name"] or _display_name(item), maximum)]
-        elif multi is not None:
-            scoring = "rubric"
-            scores = multi.args[0]().items()  # placeholder (all 0) until the test runs
-            maximum = sum(s.points for s in scores if not s.extra_credit)
-        else:
-            scoring, scores = "weight", []
-            maximum = float(_mark_arg(item, "pedagog_weight", DEFAULT_WEIGHT))
+        mark = _scoring_mark(item)
+        single, multi = _new_scores(item)  # placeholders (never awarded) until the test runs
         self.entries[item.nodeid] = _Entry(
-            id=item.nodeid,
-            # A single rubric item's name is the test's name in the results.
-            name=scores[0].name if scoring == "item" else _display_name(item),
+            node=item.nodeid,
+            name=(mark.kwargs.get("name") if mark is not None else None) or _display_name(item),
             order=self._next_order(),
-            max=maximum,
-            scoring=scoring,
-            scores=scores,
+            declared_id=_declared_id(item),
+            scoring="item" if single is not None else "rubric" if multi is not None else "none",
+            rubric_name=type(multi).__name__ if multi is not None else None,
+            scores=[single] if single is not None else multi.items() if multi is not None else [],
             number=_mark_arg(item, "pedagog_number", None),
             score_visibility=vis.kwargs["score"] if vis else DEFAULT_SCORE_VISIBILITY,
             output_visibility=vis.kwargs["output"] if vis else DEFAULT_OUTPUT_VISIBILITY,
@@ -351,10 +457,9 @@ class ResultsRecorder:
         if report.failed:
             self.collection_errors.append(
                 _Entry(
-                    id=f"{report.nodeid}::<collection>",
+                    node=f"{report.nodeid}::<collection>",
                     name=f"Collecting {report.nodeid}",
                     order=self._next_order(),
-                    max=0.0,
                     status="error",
                     output=[report.longreprtext],
                 )
@@ -363,9 +468,13 @@ class ResultsRecorder:
     @pytest.hookimpl(trylast=True)
     def pytest_runtest_teardown(self, item: pytest.Item, nextitem: pytest.Item | None) -> None:
         entry = self.entries.get(item.nodeid)
+        if entry is None:
+            return
         actual = _item_scores(item)
-        if entry is not None and actual:
+        if actual:
             entry.scores = actual
+        entry.failure = item.stash.get(FAILURE_KEY, None)
+        entry.failed_checks = item.stash.get(FAILED_CHECKS_KEY, [])
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         entry = self.entries.get(report.nodeid)
@@ -383,14 +492,17 @@ class ResultsRecorder:
         if report.failed:
             entry.output.append(report.longreprtext)
 
+    def _sorted(self) -> list[_Entry]:
+        return sorted([*self.collection_errors, *self.entries.values()], key=_Entry.sort_key)
+
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
-        entries = sorted([*self.collection_errors, *self.entries.values()], key=_Entry.sort_key)
+        entries = self._sorted()
         doc = {
             "submission-id": None,
             "run-id": None,
             "summary": {
                 "score": sum(e.earned() for e in entries),
-                "total": sum(e.max for e in entries),
+                "total": sum(e.max() for e in entries),
             },
             "tests": [e.to_doc() for e in entries],
             "artifacts": [],
@@ -400,3 +512,16 @@ class ResultsRecorder:
         # JSON is valid YAML, so no YAML dependency is needed.
         tmp.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         os.replace(tmp, self.path)
+
+    def pytest_terminal_summary(self, terminalreporter: Any) -> None:
+        """The grading trace in the run's log, for instructors."""
+        entries = self._sorted()
+        if not entries:
+            return
+        terminalreporter.write_sep("=", "pedagog grading")
+        for entry in entries:
+            terminalreporter.write_line(entry.trace())
+        terminalreporter.write_line(
+            f"summary: score {_sum([e.earned() for e in entries])} = {_num(sum(e.earned() for e in entries))}, "
+            f"total {_sum([e.max() for e in entries])} = {_num(sum(e.max() for e in entries))}"
+        )

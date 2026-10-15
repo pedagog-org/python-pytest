@@ -69,7 +69,7 @@ def run(pytester, source: str) -> dict:
     # runs re-import modules, which breaks exception-class identity).
     pytester.runpytest_subprocess("--pedagog-results", str(out))
     tests = json.loads(out.read_text())["tests"]
-    return {t["id"].split("::")[-1]: t for t in tests}
+    return {t["node"].split("::")[-1]: t for t in tests}
 
 
 def assert_all_pass(results: dict, *expected: str) -> None:
@@ -327,3 +327,25 @@ def test_student_errors_are_reported_without_rpyc_internals(pytester, runner):
     assert "Derived" not in output
     if sys.version_info >= (3, 11):  # notes need 3.11
         assert 'File "buggy.py", line 5, in helper' in output
+
+
+def test_check_feedback_points_at_the_test_and_the_student_code(pytester, runner):
+    runner(linked_list=LINKED_LIST)
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+        from linked_list import LinkedList
+
+        @rubric_item(points=2)
+        def test_index(score: Score):
+            with score.check(reason="indexing past the end"):
+                LinkedList()[5]
+        """,
+    )
+    feedback = results["test_index"]["feedback"]
+    assert feedback.splitlines()[0] == "✗ +0 indexing past the end (worth 2)"
+    assert "test_suite.py:7: IndexError" in feedback
+    if sys.version_info >= (3, 11):  # exception notes
+        assert "student code traceback:" in feedback and "linked_list.py" in feedback
+    assert "rpyc" not in feedback and "pedagog_pytest" not in feedback
