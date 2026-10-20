@@ -126,7 +126,7 @@ def test_process_isolation_separates_users(assignment):
     assert proc.returncode == 2
     assert "results upload failed" in proc.stderr
     got = outcomes(results)
-    failed = {k: v["output"] for k, v in got.items() if v["status"] != "pass"}
+    failed = {k: v["error"] for k, v in got.items() if v["status"] != "pass"}
     assert len(got) == 4 and not failed, failed
 
 
@@ -315,7 +315,7 @@ def test_student_code_cannot_cheat_or_interfere(assignment):
     proc = launch(tests, code, results)
     assert proc.returncode == 0, proc.stderr[-2000:]
     got = outcomes(results)
-    failed = {k: v["output"][-1500:] for k, v in got.items() if v["status"] != "pass"}
+    failed = {k: v["error"][-1500:] for k, v in got.items() if v["status"] != "pass"}
     assert len(got) == 9 and not failed, failed
     # The 100 MB flood never reached the launcher's (and so the pod's) logs.
     assert len(proc.stdout) + len(proc.stderr) < 200_000

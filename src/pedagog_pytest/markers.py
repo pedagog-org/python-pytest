@@ -16,7 +16,8 @@ from .scoring import DEFAULT_CLAMP, Clamp, ExtraCredit, ItemSpec, Rubric
 
 
 class Visibility(str, enum.Enum):
-    """When students can see one part of a test's result (its score or its output)."""
+    """When students can see one part of a test's result: its score, feedback,
+    stdout or error."""
 
     VISIBLE = "visible"
     """Immediately, as soon as the run finishes."""
@@ -41,8 +42,8 @@ HIDDEN: Final = Visibility.HIDDEN
 AFTER_END: Final = Visibility.AFTER_END
 AFTER_PUBLISH: Final = Visibility.AFTER_PUBLISH
 
-DEFAULT_SCORE_VISIBILITY: Final = Visibility.VISIBLE
-DEFAULT_OUTPUT_VISIBILITY: Final = Visibility.AFTER_END
+DEFAULT_VISIBILITY: Final = Visibility.VISIBLE
+PARTS: Final = ("score", "feedback", "stdout", "error")
 DEFAULT_TIMEOUT: Final = 10.0
 
 
@@ -109,8 +110,10 @@ def visibility(level: Visibility, /) -> pytest.MarkDecorator: ...
 @overload
 def visibility(
     *,
-    score: Visibility = DEFAULT_SCORE_VISIBILITY,
-    output: Visibility = DEFAULT_OUTPUT_VISIBILITY,
+    score: Visibility = DEFAULT_VISIBILITY,
+    feedback: Visibility = DEFAULT_VISIBILITY,
+    stdout: Visibility = DEFAULT_VISIBILITY,
+    error: Visibility = DEFAULT_VISIBILITY,
 ) -> pytest.MarkDecorator: ...
 
 
@@ -118,20 +121,25 @@ def visibility(
     level: Visibility | None = None,
     /,
     *,
-    score: Visibility = DEFAULT_SCORE_VISIBILITY,
-    output: Visibility = DEFAULT_OUTPUT_VISIBILITY,
+    score: Visibility = DEFAULT_VISIBILITY,
+    feedback: Visibility = DEFAULT_VISIBILITY,
+    stdout: Visibility = DEFAULT_VISIBILITY,
+    error: Visibility = DEFAULT_VISIBILITY,
 ) -> pytest.MarkDecorator:
-    """When students see the test's score and its output (failure messages).
+    """When students see each part of the test's result: its ``score`` (points
+    and pass/fail), ``feedback`` (its checks and awards), ``stdout`` (what it
+    printed) and ``error`` (what went wrong: failures and exceptions, with
+    pytest's values, which can reveal what a test expects).
 
-    ``@visibility(AFTER_END)`` sets both parts at once; ``@visibility(score=...,
-    output=...)`` sets them separately. Output can reveal what a test checks, so
-    by default it waits for the deadline while the score shows immediately.
+    ``@visibility(AFTER_END)`` sets every part at once; the keywords set them
+    separately. Everything is visible by default; courses can override it.
     """
+    parts = {"score": score, "feedback": feedback, "stdout": stdout, "error": error}
     if level is not None:
-        if (score, output) != (DEFAULT_SCORE_VISIBILITY, DEFAULT_OUTPUT_VISIBILITY):
-            raise TypeError("pass either one visibility for both parts, or score=/output=, not both")
-        score = output = level
-    return pytest.mark.pedagog_visibility(score=Visibility(score), output=Visibility(output))
+        if any(v != DEFAULT_VISIBILITY for v in parts.values()):
+            raise TypeError("pass either one visibility for every part, or score=/feedback=/stdout=/error=, not both")
+        parts = dict.fromkeys(parts, level)
+    return pytest.mark.pedagog_visibility(**{k: Visibility(v) for k, v in parts.items()})
 
 
 def solution_expect(outcome: Expect) -> pytest.MarkDecorator:

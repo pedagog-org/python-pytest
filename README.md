@@ -17,13 +17,13 @@ from pedagog_pytest import AFTER_END, HIDDEN, Expect, Score, number, rubric_item
 
 @rubric_item("Appends one element", points=10, id="append")   # see Rubrics
 @number("1.1")                   # label and position in the results
-@visibility(output=HIDDEN)       # default: score VISIBLE, output AFTER_END
+@visibility(error=HIDDEN)        # default: every part VISIBLE
 @timeout(5)                      # seconds; default 10.0, 0 disables
 def test_append(score: Score):
     ...
     score.award()                # all 10 points (only reached if the asserts above pass)
 
-@visibility(AFTER_END)           # one value sets both score and output
+@visibility(AFTER_END)           # one value sets every part
 @solution_expect(Expect.FAIL)    # the reference solution is meant to fail this one
 def test_stretch_goal():
     """Reverses in place"""      # first docstring line is the test name
@@ -35,7 +35,7 @@ def test_stretch_goal():
 | `rubric_item(name, points, *, id, clamp, extra_credit)` | The test is one rubric item, scored through the `score` fixture | pass/fail only, 0 points |
 | `rubric(Rubric, *, id, name)` | The test is scored by several items, through the `scores` fixture | pass/fail only, 0 points |
 | `number(value)` | Label shown with the test, and its position: results are sorted by number (dotted parts numerically, `1.2` before `1.10`), unnumbered tests last in collection order | none |
-| `visibility(level)` / `visibility(score=, output=)` | When students see the score and the output (failure messages and feedback, which can reveal what a test checks) | score `VISIBLE`, output `AFTER_END` |
+| `visibility(level)` / `visibility(score=, feedback=, stdout=, error=)` | When students see each part of the result (see [What students see](#what-students-see)) | every part `VISIBLE` |
 | `solution_expect(outcome)` | What the reference solution should do during validation; validation fails on a mismatch | `Expect.PASS` |
 | `timeout(seconds)` | Time limit; a slower test fails (under isolation its process is killed) | `10.0` |
 
@@ -86,13 +86,16 @@ def test_sort(scores: Sorting):
 ```
 
 - **Scoring calls** (on any `Score`):
-  - `award(points=FULL, reason=None)` adds points (negative to deduct); `FULL` adds the rest
-    of the item's points.
-  - `set(points, reason=None)` replaces the running total (for computed scores).
+  - `award(points=FULL, reason=None, *, id=None)` adds points (negative to deduct); `FULL`
+    adds the rest of the item's points. With a `reason`, it's a step of the feedback.
+  - `set(points, reason=None)` replaces the running total (for computed scores); it shows in
+    the trace, not the feedback.
   - `nil()` resets the item: no points, no feedback, not attempted.
-  - `check(points=FULL, reason=None)` adds `points` if its block completes. If the block
-    raises (including `pytest.raises`' "DID NOT RAISE"), it adds nothing and records the
-    failure, and the test carries on but ends as failed. Time limits still stop it.
+  - `check(points=FULL, reason=None, *, id=None)` adds `points` if its block completes. If
+    the block raises (including `pytest.raises`' "DID NOT RAISE"), it adds nothing, records
+    what it raised in the test's error, and the test carries on but ends as failed. Time
+    limits still stop it. Every check is a step of the feedback.
+  - `id=` names a step (unique within its item), so it can be followed across runs.
   - `attempt()` marks an `ATTEMPTED_WORK` item attempted without points.
 - **Items:** `item(name=None, points=0, *, id=None, clamp=(0, FULL), extra_credit=NONE)`.
   The id defaults to the attribute name and the name to the id; item ids must be unique.
@@ -105,13 +108,41 @@ def test_sort(scores: Sorting):
   get `id[param]`); duplicates are a usage error. Tests without one have no id.
 - `@rubric_item` and `@rubric` are mutually exclusive.
 
-**Feedback** (shown to students, subject to *output* visibility) reads as a checklist:
+## What students see
 
-```text
-✓ +1 empty list
-✗ +0 1000 random values (worth 3)
-  test_sort.py:12: AssertionError: assert [3, 1, 2] == [1, 2, 3]
-+1 first 10 elements correct
+Each test's result has four parts, each with its own visibility (`@visibility`; pedagog
+courses can override it):
+
+| Part | What it is |
+| --- | --- |
+| `score` | Points, and pass/fail |
+| `feedback` | The checks: each item's steps, with your reasons, and the message of a failed check's `assert` |
+| `stdout` | What the test printed: write here to tell students something (e.g. intermediate values) |
+| `error` | What went wrong: failures outside a `check()`, what failed checks raised, exceptions from the student's code, with pytest's values and tracebacks |
+
+Everything is visible by default. `error` can reveal what a test expects (pytest shows the
+values it compared), so hide it on exams: `@visibility(error=HIDDEN)`.
+
+Only what you write reaches feedback: a failed check's step carries its `assert` message
+(`assert len(ll) == 3, "len() should count every node"`), never pytest's values; an assert
+without a message adds nothing, and one raised in the student's code isn't yours, so its
+message stays in the error. The feedback for
+
+```python
+with scores.correct.check(points=1, reason="empty list", id="empty"):
+    assert sort([]) == []
+with scores.correct.check(points=3, reason="1000 random values", id="large"):
+    assert sort(data) == sorted(data), "sort() lost an element"
+scores.no_globals.award(-1, reason="one global")
+```
+
+is, under each item:
+
+```yaml
+- { id: empty, result: pass, points: 1, worth: 1, reason: "empty list" }
+- { id: large, result: fail, points: 0, worth: 3, reason: "1000 random values",
+    message: "sort() lost an element" }
+- { points: -1, reason: "one global" }          # an award: no result
 ```
 
 **Grading trace** (for instructors only): every test's results entry has a `trace` that
@@ -133,15 +164,19 @@ sort — sort() (rubric Sorting)
 When `PEDAGOG_RESULTS_DIR` is set (pedagog sets it), or with `--pedagog-results PATH`, the
 plugin writes `results.yaml` (as JSON, which is valid YAML):
 
+- `run`: `status` (`complete`, or `error` when tests couldn't all run, e.g. a module that
+  fails to import because the student's code is broken: its tests never ran, so the run
+  can't pass vacuously) and `output` (what stopped them; for staff, never students);
 - one entry per test: `id` (only if declared), `node` (pytest node id), `name`, `status`
-  (`pass`/`fail`/`error`/`skip`), `score`, `max`, `output` (pytest's failure text),
-  `feedback`, `trace`, `visibility`, and optional `number` / `solution-expect`;
-- `@rubric_item` tests add `clamp`, `extra-credit` and `attempted`; `@rubric` tests list
-  their `items` (`id`, `name`, `score`, `max`, `clamp`, `extra-credit`, `attempted`,
-  `feedback`);
-- a module that fails to import (e.g. broken student code) becomes an `error` entry, so a
-  run never passes vacuously;
+  (`pass`/`fail`/`error`/`skip`), `score`, `max`, `stdout`, `error`, `trace`, `visibility`
+  (`score`, `feedback`, `stdout`, `error`), and optional `number` / `solution-expect`;
+- scored tests list their `items` (one for `@rubric_item`): `id`, `name`, `score`, `max`,
+  `clamp`, `extra-credit`, `attempted`, and `steps` (the feedback);
 - `summary` totals the scores and maxes.
+
+Version 2 changed the format: `output` became `error`, text `feedback` became items'
+`steps`, `<collection>` entries became `run`, and `@visibility(output=)` became four parts.
+pedagog reads both.
 
 Plain `pytest` runs without either setting write nothing.
 

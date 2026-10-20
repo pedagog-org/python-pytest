@@ -85,6 +85,8 @@ def _clean(error: Exception) -> Exception:
         clean = kind(*args)
     except Exception:
         return error
+    # Raised in student code: whatever message it carries isn't the instructor's.
+    setattr(clean, "_pedagog_from_student", True)
     frames = _student_frames(remote_tb if isinstance(remote_tb, str) else "".join(remote_tb))
     if frames and hasattr(clean, "add_note"):
         clean.add_note("student code traceback:\n" + frames)
