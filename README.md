@@ -17,7 +17,7 @@ from pedagog_pytest import AFTER_END, HIDDEN, Expect, Score, number, rubric_item
 
 @rubric_item("Appends one element", points=10, id="append")   # see Rubrics
 @number("1.1")                   # label and position in the results
-@visibility(error=HIDDEN)        # default: every part VISIBLE
+@visibility(error=HIDDEN)        # default: VISIBLE, but error AFTER_END
 @timeout(5)                      # seconds; default 10.0, 0 disables
 def test_append(score: Score):
     ...
@@ -35,7 +35,7 @@ def test_stretch_goal():
 | `rubric_item(name, points, *, id, clamp, extra_credit)` | The test is one rubric item, scored through the `score` fixture | pass/fail only, 0 points |
 | `rubric(Rubric, *, id, name)` | The test is scored by several items, through the `scores` fixture | pass/fail only, 0 points |
 | `number(value)` | Label shown with the test, and its position: results are sorted by number (dotted parts numerically, `1.2` before `1.10`), unnumbered tests last in collection order | none |
-| `visibility(level)` / `visibility(score=, feedback=, stdout=, error=)` | When students see each part of the result (see [What students see](#what-students-see)) | every part `VISIBLE` |
+| `visibility(level)` / `visibility(score=, feedback=, stdout=, error=)` | When students see each part of the result (see [What students see](#what-students-see)) | `VISIBLE`, but `error` `AFTER_END` |
 | `solution_expect(outcome)` | What the reference solution should do during validation; validation fails on a mismatch | `Expect.PASS` |
 | `timeout(seconds)` | Time limit; a slower test fails (under isolation its process is killed) | `10.0` |
 
@@ -120,8 +120,9 @@ courses can override it):
 | `stdout` | What the test printed: write here to tell students something (e.g. intermediate values) |
 | `error` | What went wrong: failures outside a `check()`, what failed checks raised, exceptions from the student's code, with pytest's values and tracebacks |
 
-Everything is visible by default. `error` can reveal what a test expects (pytest shows the
-values it compared), so hide it on exams: `@visibility(error=HIDDEN)`.
+Everything is visible by default except `error`, which waits for the deadline (`AFTER_END`):
+it can reveal what a test expects, since pytest shows the values it compared and the test's
+source. On exams, hide it: `@visibility(error=HIDDEN)`.
 
 Only what you write reaches feedback: a failed check's step carries its `assert` message
 (`assert len(ll) == 3, "len() should count every node"`), never pytest's values; an assert
