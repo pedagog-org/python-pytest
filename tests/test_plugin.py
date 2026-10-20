@@ -32,7 +32,9 @@ def test_defaults_for_passing_and_failing_tests(pytester):
     assert tests["test_ok"]["status"] == "pass"
     # Undecorated tests are pass/fail only.
     assert tests["test_ok"]["score"] == tests["test_ok"]["max"] == 0.0
-    assert tests["test_ok"]["visibility"] == dict.fromkeys(("score", "feedback", "stdout", "error"), "visible")
+    assert tests["test_ok"]["visibility"] == {
+        "score": "visible", "feedback": "visible", "stdout": "visible", "error": "after_end"
+    }, "the error can reveal what a test expects"
     assert tests["test_ok"]["error"] == ""
     assert tests["test_ok"]["stdout"] == "1 + 1 is 2\n", "what the test printed"
     assert "number" not in tests["test_ok"]
@@ -243,8 +245,9 @@ def test_defaults_are_explicit_in_signatures():
     assert inspect.signature(p.item).parameters["points"].default == 0.0
     assert inspect.signature(p.timeout).parameters["seconds"].default == 10.0
     vis = inspect.signature(p.visibility).parameters
-    for part in ("score", "feedback", "stdout", "error"):
+    for part in ("score", "feedback", "stdout"):
         assert vis[part].default is p.Visibility.VISIBLE
+    assert vis["error"].default is p.Visibility.AFTER_END
 
 
 def test_mixing_a_level_with_parts_is_rejected():

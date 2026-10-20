@@ -43,7 +43,16 @@ AFTER_END: Final = Visibility.AFTER_END
 AFTER_PUBLISH: Final = Visibility.AFTER_PUBLISH
 
 DEFAULT_VISIBILITY: Final = Visibility.VISIBLE
+# The error can reveal what a test expects (pytest shows the values and the
+# test's source), so it waits for the deadline.
+DEFAULT_ERROR_VISIBILITY: Final = Visibility.AFTER_END
 PARTS: Final = ("score", "feedback", "stdout", "error")
+DEFAULTS: Final = {
+    "score": DEFAULT_VISIBILITY,
+    "feedback": DEFAULT_VISIBILITY,
+    "stdout": DEFAULT_VISIBILITY,
+    "error": DEFAULT_ERROR_VISIBILITY,
+}
 DEFAULT_TIMEOUT: Final = 10.0
 
 
@@ -113,7 +122,7 @@ def visibility(
     score: Visibility = DEFAULT_VISIBILITY,
     feedback: Visibility = DEFAULT_VISIBILITY,
     stdout: Visibility = DEFAULT_VISIBILITY,
-    error: Visibility = DEFAULT_VISIBILITY,
+    error: Visibility = DEFAULT_ERROR_VISIBILITY,
 ) -> pytest.MarkDecorator: ...
 
 
@@ -124,7 +133,7 @@ def visibility(
     score: Visibility = DEFAULT_VISIBILITY,
     feedback: Visibility = DEFAULT_VISIBILITY,
     stdout: Visibility = DEFAULT_VISIBILITY,
-    error: Visibility = DEFAULT_VISIBILITY,
+    error: Visibility = DEFAULT_ERROR_VISIBILITY,
 ) -> pytest.MarkDecorator:
     """When students see each part of the test's result: its ``score`` (points
     and pass/fail), ``feedback`` (its checks and awards), ``stdout`` (what it
@@ -132,11 +141,12 @@ def visibility(
     pytest's values, which can reveal what a test expects).
 
     ``@visibility(AFTER_END)`` sets every part at once; the keywords set them
-    separately. Everything is visible by default; courses can override it.
+    separately. Everything is visible by default but the error, which waits
+    for the deadline; courses can override it.
     """
     parts = {"score": score, "feedback": feedback, "stdout": stdout, "error": error}
     if level is not None:
-        if any(v != DEFAULT_VISIBILITY for v in parts.values()):
+        if parts != DEFAULTS:
             raise TypeError("pass either one visibility for every part, or score=/feedback=/stdout=/error=, not both")
         parts = dict.fromkeys(parts, level)
     return pytest.mark.pedagog_visibility(**{k: Visibility(v) for k, v in parts.items()})

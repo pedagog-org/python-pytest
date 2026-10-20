@@ -3,6 +3,7 @@
 from .markers import (
     AFTER_END,
     AFTER_PUBLISH,
+    DEFAULT_ERROR_VISIBILITY,
     DEFAULT_TIMEOUT,
     DEFAULT_VISIBILITY,
     HIDDEN,
@@ -31,6 +32,7 @@ __all__ = [
     "rubric_item",
     "AFTER_END",
     "AFTER_PUBLISH",
+    "DEFAULT_ERROR_VISIBILITY",
     "DEFAULT_TIMEOUT",
     "DEFAULT_VISIBILITY",
     "HIDDEN",

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 from .markers import (
     DEFAULT_TIMEOUT,
-    DEFAULT_VISIBILITY,
+    DEFAULTS,
     PARTS,
     Expect,
     Visibility,
@@ -306,7 +306,7 @@ class _Entry:
     order: int
     declared_id: str | None = None
     number: str | None = None
-    visibility: dict[str, Visibility] = field(default_factory=lambda: dict.fromkeys(PARTS, DEFAULT_VISIBILITY))
+    visibility: dict[str, Visibility] = field(default_factory=lambda: dict(DEFAULTS))
     solution_expect: Expect | None = None
     # "none": pass/fail only (0 points); "item": one rubric item; "rubric": several.
     scoring: str = "none"
@@ -444,9 +444,7 @@ class ResultsRecorder:
             rubric_name=type(multi).__name__ if multi is not None else None,
             scores=[single] if single is not None else multi.items() if multi is not None else [],
             number=_mark_arg(item, "pedagog_number", None),
-            visibility={part: Visibility(vis.kwargs[part]) for part in PARTS}
-            if vis
-            else dict.fromkeys(PARTS, DEFAULT_VISIBILITY),
+            visibility={part: Visibility(vis.kwargs[part]) for part in PARTS} if vis else dict(DEFAULTS),
             solution_expect=_mark_arg(item, "pedagog_solution_expect", None),
         )
 
