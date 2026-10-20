@@ -26,9 +26,9 @@ if TYPE_CHECKING:
     from .isolation.client import StudentFinder
 
 from .markers import (
-    DEFAULT_OUTPUT_VISIBILITY,
-    DEFAULT_SCORE_VISIBILITY,
     DEFAULT_TIMEOUT,
+    DEFAULT_VISIBILITY,
+    PARTS,
     Expect,
     Visibility,
 )
@@ -44,7 +44,7 @@ MAX_OUTPUT_CHARS: Final = 20_000
 
 MARKERS: Final = (
     "pedagog_number(value): label and sort position in the results",
-    "pedagog_visibility(score, output): when students see score/output",
+    "pedagog_visibility(score, feedback, stdout, error): when students see each part",
     "pedagog_solution_expect(outcome): expected reference-solution outcome",
     "pedagog_timeout(seconds): per-test time limit",
     "pedagog_rubric_item(id, name, points, clamp, extra_credit): one rubric item, scored via the score fixture",
@@ -306,15 +306,16 @@ class _Entry:
     order: int
     declared_id: str | None = None
     number: str | None = None
-    score_visibility: Visibility = DEFAULT_SCORE_VISIBILITY
-    output_visibility: Visibility = DEFAULT_OUTPUT_VISIBILITY
+    visibility: dict[str, Visibility] = field(default_factory=lambda: dict.fromkeys(PARTS, DEFAULT_VISIBILITY))
     solution_expect: Expect | None = None
     # "none": pass/fail only (0 points); "item": one rubric item; "rubric": several.
     scoring: str = "none"
     rubric_name: str | None = None
     scores: list[Score] = field(default_factory=list)
     status: str = "pass"
-    output: list[str] = field(default_factory=list)
+    # pytest's reports of the test's failures (uncaught, with values and traceback).
+    reports: list[str] = field(default_factory=list)
+    stdout: str = ""
     failure: str | None = None
     failed_checks: list[str] = field(default_factory=list)
 
@@ -332,15 +333,10 @@ class _Entry:
         parts = tuple((0, int(p)) if p.isdigit() else (1, p) for p in self.number.split("."))
         return (0, parts, self.order)
 
-    def feedback(self) -> str:
-        """What the student is told (subject to output visibility)."""
-        if self.scoring == "none":
-            return ""
-        lines = [self.scores[0].feedback()] if self.scoring == "item" else []
-        if self.failure is not None and self.status in ("fail", "error"):
-            first, *rest = self.failure.splitlines()
-            lines.append("\n".join(["✗ " + first, *("  " + line for line in rest)]))
-        return "\n".join(line for line in lines if line)
+    def error(self) -> str:
+        """What went wrong: what failed checks raised, then pytest's reports."""
+        failures = [f for s in self.scores for f in s.failures]
+        return "\n\n".join([*failures, *self.reports])
 
     def status_reason(self) -> str:
         if self.status in ("pass", "skip"):
@@ -383,20 +379,9 @@ class _Entry:
                 "status": self.status,
                 "score": self.earned(),
                 "max": self.max(),
-                "output": "\n".join(self.output)[:MAX_OUTPUT_CHARS],
-                "feedback": self.feedback()[:MAX_OUTPUT_CHARS],
-                "trace": self.trace()[:MAX_OUTPUT_CHARS],
-                "visibility": {"score": self.score_visibility.value, "output": self.output_visibility.value},
             }
         )
-        if self.number is not None:
-            doc["number"] = self.number
-        if self.solution_expect is not None:
-            doc["solution-expect"] = self.solution_expect.value
-        if self.scoring == "item":
-            only = self.scores[0]
-            doc.update({"clamp": list(only.bounds), "extra-credit": only.extra_credit.value, "attempted": only.attempted})
-        elif self.scoring == "rubric":
+        if self.scores:
             doc["items"] = [
                 {
                     "id": s.id,
@@ -406,10 +391,22 @@ class _Entry:
                     "clamp": list(s.bounds),
                     "extra-credit": s.extra_credit.value,
                     "attempted": s.attempted,
-                    "feedback": s.feedback()[:MAX_OUTPUT_CHARS],
+                    "steps": s.feedback_steps,
                 }
                 for s in self.scores
             ]
+        doc.update(
+            {
+                "stdout": self.stdout[:MAX_OUTPUT_CHARS],
+                "error": self.error()[:MAX_OUTPUT_CHARS],
+                "trace": self.trace()[:MAX_OUTPUT_CHARS],
+                "visibility": {part: self.visibility[part].value for part in PARTS},
+            }
+        )
+        if self.number is not None:
+            doc["number"] = self.number
+        if self.solution_expect is not None:
+            doc["solution-expect"] = self.solution_expect.value
         return doc
 
 
@@ -428,10 +425,11 @@ class ResultsRecorder:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.entries: dict[str, _Entry] = {}
-        self.collection_errors: list[_Entry] = []
+        # Modules that couldn't be collected (e.g. student code that doesn't import).
+        self.collection_errors: list[str] = []
 
     def _next_order(self) -> int:
-        return len(self.entries) + len(self.collection_errors)
+        return len(self.entries)
 
     def pytest_itemcollected(self, item: pytest.Item) -> None:
         vis = item.get_closest_marker("pedagog_visibility")
@@ -446,24 +444,17 @@ class ResultsRecorder:
             rubric_name=type(multi).__name__ if multi is not None else None,
             scores=[single] if single is not None else multi.items() if multi is not None else [],
             number=_mark_arg(item, "pedagog_number", None),
-            score_visibility=vis.kwargs["score"] if vis else DEFAULT_SCORE_VISIBILITY,
-            output_visibility=vis.kwargs["output"] if vis else DEFAULT_OUTPUT_VISIBILITY,
+            visibility={part: Visibility(vis.kwargs[part]) for part in PARTS}
+            if vis
+            else dict.fromkeys(PARTS, DEFAULT_VISIBILITY),
             solution_expect=_mark_arg(item, "pedagog_solution_expect", None),
         )
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
-        # A module that fails to import (e.g. broken student code) must not
-        # leave an empty, vacuously "passing" result.
+        # A module that fails to import (e.g. broken student code) makes the
+        # run an error: its tests never ran, so it can't pass vacuously.
         if report.failed:
-            self.collection_errors.append(
-                _Entry(
-                    node=f"{report.nodeid}::<collection>",
-                    name=f"Collecting {report.nodeid}",
-                    order=self._next_order(),
-                    status="error",
-                    output=[report.longreprtext],
-                )
-            )
+            self.collection_errors.append(f"{report.nodeid}:\n{report.longreprtext}")
 
     @pytest.hookimpl(trylast=True)
     def pytest_runtest_teardown(self, item: pytest.Item, nextitem: pytest.Item | None) -> None:
@@ -490,16 +481,23 @@ class ResultsRecorder:
         elif report.skipped and report.when == "setup":
             entry.status = "skip"
         if report.failed:
-            entry.output.append(report.longreprtext)
+            entry.reports.append(report.longreprtext)
+        # Each phase's report carries everything printed so far.
+        entry.stdout = report.capstdout
 
     def _sorted(self) -> list[_Entry]:
-        return sorted([*self.collection_errors, *self.entries.values()], key=_Entry.sort_key)
+        return sorted(self.entries.values(), key=_Entry.sort_key)
 
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         entries = self._sorted()
         doc = {
             "submission-id": None,
             "run-id": None,
+            # Whether every test could run, and what stopped them if not (for staff).
+            "run": {
+                "status": "error" if self.collection_errors else "complete",
+                "output": "\n\n".join(self.collection_errors)[:MAX_OUTPUT_CHARS],
+            },
             "summary": {
                 "score": sum(e.earned() for e in entries),
                 "total": sum(e.max() for e in entries),

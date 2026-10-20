@@ -74,7 +74,7 @@ def run(pytester, source: str) -> dict:
 
 def assert_all_pass(results: dict, *expected: str) -> None:
     assert sorted(results) == sorted(expected), results
-    failed = {k: v["output"] for k, v in results.items() if v["status"] != "pass"}
+    failed = {k: v["error"] for k, v in results.items() if v["status"] != "pass"}
     assert not failed, failed
 
 
@@ -218,7 +218,7 @@ def test_time_limit_kills_only_that_tests_process(pytester, runner):
         """,
     )
     assert results["test_hangs"]["status"] == "fail"
-    assert "time limit" in results["test_hangs"]["output"]
+    assert "time limit" in results["test_hangs"]["error"]
     assert results["test_next_one_is_fine"]["status"] == "pass"
 
 
@@ -237,7 +237,7 @@ def test_student_process_crash_fails_only_that_test(pytester, runner):
         """,
     )
     assert results["test_dies"]["status"] == "fail"
-    assert "exited unexpectedly" in results["test_dies"]["output"]
+    assert "exited unexpectedly" in results["test_dies"]["error"]
     assert results["test_survives"]["status"] == "pass"
 
 
@@ -246,9 +246,9 @@ def test_missing_student_name_is_a_collection_error(pytester, runner):
     pytester.makepyfile(test_suite="from linked_list import Missing\n\ndef test_x():\n    pass\n")
     out = pytester.path / "results.yaml"
     pytester.runpytest_subprocess("--pedagog-results", str(out))
-    tests = json.loads(out.read_text())["tests"]
-    assert tests[0]["status"] == "error"
-    assert "Missing" in tests[0]["output"]
+    run = json.loads(out.read_text())["run"]
+    assert run["status"] == "error"
+    assert "Missing" in run["output"]
 
 
 def test_module_constants_are_copied(pytester, runner):
@@ -321,7 +321,7 @@ def test_student_errors_are_reported_without_rpyc_internals(pytester, runner):
         """,
     )
     assert results["test_type_is_preserved"]["status"] == "pass"
-    output = results["test_failure_output_is_clean"]["output"]
+    output = results["test_failure_output_is_clean"]["error"]
     assert "E       ZeroDivisionError: division by zero" in output
     assert "rpyc" not in output and "protocol.py" not in output and "client.py" not in output
     assert "Derived" not in output
@@ -343,9 +343,12 @@ def test_check_feedback_points_at_the_test_and_the_student_code(pytester, runner
                 LinkedList()[5]
         """,
     )
-    feedback = results["test_index"]["feedback"]
-    assert feedback.splitlines()[0] == "✗ +0 indexing past the end (worth 2)"
-    assert "test_suite.py:7: IndexError" in feedback
+    t = results["test_index"]
+    assert t["items"][0]["steps"] == [
+        {"result": "fail", "points": 0.0, "worth": 2.0, "reason": "indexing past the end"}
+    ], "student code's error isn't a message from the instructor"
+    error = t["error"]
+    assert "test_suite.py:7: IndexError" in error
     if sys.version_info >= (3, 11):  # exception notes
-        assert "student code traceback:" in feedback and "linked_list.py" in feedback
-    assert "rpyc" not in feedback and "pedagog_pytest" not in feedback
+        assert "student code traceback:" in error and "linked_list.py" in error
+    assert "rpyc" not in error and "pedagog_pytest" not in error.split("\n\n")[0]

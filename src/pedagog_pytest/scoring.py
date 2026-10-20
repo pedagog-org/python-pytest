@@ -131,6 +131,27 @@ def describe_failure(error: BaseException, root: Path | None = None) -> str:
     return text
 
 
+def assert_message(error: BaseException) -> str | None:
+    """The message a test wrote on a failing ``assert`` (``assert x, "msg"``),
+    without pytest's explanation of the values; ``None`` if it wrote none or
+    the error isn't an assertion. Messages are for students; values may not be."""
+    if not isinstance(error, AssertionError) or getattr(error, "_pedagog_from_student", False):
+        return None
+    # Only an assert in the test itself: one raised in student code (or deeper)
+    # wrote its own message, not the instructor's.
+    # (check() sees the exception through its own frame, so compare the suite's
+    # frames: the test's file first, the file it was raised in last.)
+    frames = [f for f in traceback.extract_tb(error.__traceback__) if _suite_frame(f.filename)]
+    if frames and frames[-1].filename != frames[0].filename:
+        return None
+    text = str(error)
+    # pytest's rewritten asserts: "<message>\nassert <expr>..." or just "assert <expr>...".
+    if text.startswith("assert ") or not text.strip():
+        return None
+    message = text.split("\nassert ", 1)[0].strip()
+    return message or None
+
+
 def _indent(text: str, prefix: str = "  ") -> str:
     return "\n".join(prefix + line for line in text.splitlines())
 
@@ -154,8 +175,12 @@ class Score:
         self.extra_credit = ExtraCredit(extra_credit)
         self.total = 0.0
         self.attempted = False
-        self.lines: list[str] = []
+        # What students are told (feedback): checks, and awards with a reason.
+        self.feedback_steps: list[dict[str, object]] = []
+        # How the score came about, for instructors (the trace).
         self.steps: list[str] = []
+        # What failed checks raised (the test's error).
+        self.failures: list[str] = []
         self.failed_checks = 0
         # Set by the plugin: failure paths are shown relative to the test suite.
         self.root: Path | None = None
@@ -200,29 +225,40 @@ class Score:
         if amount > 0:
             self.attempted = True
 
-    def award(self, points: float | Full = FULL, reason: str | None = None) -> None:
-        """Add points (negative to deduct); by default the rest of the item's points."""
+    def _step(self, id: str | None, step: dict[str, object]) -> None:
+        if id is not None:
+            if not (isinstance(id, str) and id.strip()):
+                raise ValueError(f"step id must be a non-empty string, got {id!r}")
+            if any(s.get("id") == id for s in self.feedback_steps):
+                raise ValueError(f"step id {id!r} is already used in item {self.id!r}")
+            step = {"id": id, **step}
+        self.feedback_steps.append(step)
+
+    def award(self, points: float | Full = FULL, reason: str | None = None, *, id: str | None = None) -> None:
+        """Add points (negative to deduct); by default the rest of the item's points.
+
+        With a ``reason``, the award is a step of the item's feedback; ``id``
+        names that step (unique within the item)."""
         amount = self._amount(points)
         self._add(amount)
         label = f"FULL ({_signed(amount)})" if isinstance(points, Full) else _signed(amount)
         self.steps.append(f"award {label}{'  ' + reason if reason else ''}  = {_num(self.total)}")
-        if reason:
-            self.lines.append(f"{_signed(amount)} {reason}")
+        if reason or id is not None:
+            self._step(id, {"points": amount, **({"reason": reason} if reason else {})})
 
     def set(self, points: float, reason: str | None = None) -> None:
-        """Replace the running total (for computed scores)."""
+        """Replace the running total (for computed scores). Shown in the trace,
+        not in the feedback."""
         self.total = self._amount(points)
         if self.total > 0:
             self.attempted = True
         self.steps.append(f"set {_num(self.total)}{'  ' + reason if reason else ''}  = {_num(self.total)}")
-        if reason:
-            self.lines.append(f"={_num(self.total)} {reason}")
 
     def nil(self) -> None:
         """Back to 0 points, with no feedback and not attempted, as if never touched."""
         self.total = 0.0
         self.attempted = False
-        self.lines.clear()
+        self.feedback_steps.clear()
         self.steps.append("nil()  = 0 (feedback and attempted cleared)")
 
     def attempt(self) -> None:
@@ -231,29 +267,39 @@ class Score:
         self.steps.append("attempt()  attempted")
 
     @contextmanager
-    def check(self, points: float | Full = FULL, reason: str | None = None) -> Iterator[None]:
+    def check(
+        self, points: float | Full = FULL, reason: str | None = None, *, id: str | None = None
+    ) -> Iterator[None]:
         """Add ``points`` if the block completes. If it raises, add nothing,
-        record the failure on the item, and carry on (the test still ends as
-        failed). Time limits and skips propagate."""
+        record the failure, and carry on (the test still ends as failed). Time
+        limits and skips propagate.
+
+        Every check is a step of the item's feedback; a failed one carries the
+        assert's message, if the test wrote one. What it raised goes to the
+        test's error. ``id`` names the step (unique within the item)."""
+        label = f"{reason} " if reason else ""
         try:
             yield
         except (Exception, pytest.fail.Exception) as e:
             worth = self._amount(points)
             failure = describe_failure(e, self.root)
             self.failed_checks += 1
-            label = f"{reason} " if reason else ""
+            self.failures.append(failure)
             self.steps.append(f"check ✗ +0  {label}(worth {_num(worth)}): {type(e).__name__}  = {_num(self.total)}")
-            self.lines.append(f"✗ +0 {label}(worth {_num(worth)})\n{_indent(failure)}")
+            step: dict[str, object] = {"result": "fail", "points": 0.0, "worth": worth}
+            if reason:
+                step["reason"] = reason
+            message = assert_message(e)
+            if message:
+                step["message"] = message
+            self._step(id, step)
         else:
             amount = self._amount(points)
             self._add(amount)
             self.steps.append(f"check ✓ {_signed(amount)}{'  ' + reason if reason else ''}  = {_num(self.total)}")
-            if reason:
-                self.lines.append(f"✓ {_signed(amount)} {reason}")
-
-    def feedback(self) -> str:
-        """What the student is told about this item (subject to output visibility)."""
-        return "\n".join(self.lines)
+            self._step(
+                id, {"result": "pass", "points": amount, "worth": amount, **({"reason": reason} if reason else {})}
+            )
 
     def header(self) -> str:
         low, high = self.bounds

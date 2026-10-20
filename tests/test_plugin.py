@@ -20,6 +20,7 @@ def test_defaults_for_passing_and_failing_tests(pytester):
         """
         def test_ok():
             '''Adds two numbers'''
+            print("1 + 1 is", 1 + 1)
             assert 1 + 1 == 2
 
         def test_bad():
@@ -31,19 +32,21 @@ def test_defaults_for_passing_and_failing_tests(pytester):
     assert tests["test_ok"]["status"] == "pass"
     # Undecorated tests are pass/fail only.
     assert tests["test_ok"]["score"] == tests["test_ok"]["max"] == 0.0
-    assert tests["test_ok"]["visibility"] == {"score": "visible", "output": "after_end"}
-    assert tests["test_ok"]["output"] == ""
+    assert tests["test_ok"]["visibility"] == dict.fromkeys(("score", "feedback", "stdout", "error"), "visible")
+    assert tests["test_ok"]["error"] == ""
+    assert tests["test_ok"]["stdout"] == "1 + 1 is 2\n", "what the test printed"
     assert "number" not in tests["test_ok"]
     assert "solution-expect" not in tests["test_ok"]
     assert "id" not in tests["test_ok"] and "items" not in tests["test_ok"]
-    assert tests["test_ok"]["feedback"] == ""
+    assert "feedback" not in tests["test_ok"] and "output" not in tests["test_ok"]
     assert "(unscored: 0 / 0)" in tests["test_ok"]["trace"]
 
     assert tests["test_bad"]["name"] == "test_bad"
     assert tests["test_bad"]["status"] == "fail"
     assert tests["test_bad"]["score"] == 0.0
-    assert "assert (1 + 1) == 3" in tests["test_bad"]["output"]
+    assert "assert (1 + 1) == 3" in tests["test_bad"]["error"]
 
+    assert results["run"] == {"status": "complete", "output": ""}
     assert results["summary"] == {"score": 0.0, "total": 0.0}
     assert results["submission-id"] is None and results["artifacts"] == []
 
@@ -56,7 +59,7 @@ def test_decorators_set_metadata(pytester):
 
         @rubric_item(points=10)
         @number("2.1")
-        @visibility(output=HIDDEN)
+        @visibility(error=HIDDEN)
         @solution_expect(Expect.FAIL)
         def test_meta(score):
             assert False
@@ -65,7 +68,7 @@ def test_decorators_set_metadata(pytester):
     t = by_id(results)["test_meta"]
     assert t["max"] == 10.0
     assert t["number"] == "2.1"
-    assert t["visibility"] == {"score": "visible", "output": "hidden"}
+    assert t["visibility"] == {"score": "visible", "feedback": "visible", "stdout": "visible", "error": "hidden"}
     assert t["solution-expect"] == "fail"
 
 
@@ -89,18 +92,16 @@ def test_setup_errors_and_skips(pytester):
     )
     tests = by_id(results)
     assert tests["test_uses_broken"]["status"] == "error"
-    assert "fixture exploded" in tests["test_uses_broken"]["output"]
+    assert "fixture exploded" in tests["test_uses_broken"]["error"]
     assert tests["test_skipped"]["status"] == "skip"
     assert tests["test_skipped"]["score"] == 0.0
 
 
-def test_collection_error_is_recorded_not_silent(pytester):
+def test_collection_error_makes_the_run_an_error(pytester):
     results = run(pytester, "import does_not_exist\n\ndef test_never():\n    pass\n")
-    assert len(results["tests"]) == 1
-    t = results["tests"][0]
-    assert t["status"] == "error"
-    assert t["node"].endswith("::<collection>")
-    assert "does_not_exist" in t["output"]
+    assert results["tests"] == []
+    assert results["run"]["status"] == "error", "a run that couldn't load its tests never passes"
+    assert "does_not_exist" in results["run"]["output"]
 
 
 def test_parametrized_tests_get_distinct_ids_and_names(pytester):
@@ -144,7 +145,7 @@ def test_timeout_fails_the_test_even_if_student_code_catches_exceptions(pytester
     )
     tests = by_id(results)
     assert tests["test_hangs"]["status"] == "fail"
-    assert "exceeded its 0.3s time limit" in tests["test_hangs"]["output"]
+    assert "exceeded its 0.3s time limit" in tests["test_hangs"]["error"]
     assert tests["test_after"]["status"] == "pass", "later tests still run"
 
 
@@ -181,7 +182,7 @@ def test_markers_are_registered(pytester):
     pytester.runpytest("--strict-markers").assert_outcomes(passed=1)
 
 
-def test_one_visibility_sets_both_parts(pytester):
+def test_one_visibility_sets_every_part(pytester):
     results = run(
         pytester,
         """
@@ -192,7 +193,7 @@ def test_one_visibility_sets_both_parts(pytester):
             pass
         """,
     )
-    assert by_id(results)["test_x"]["visibility"] == {"score": "after_end", "output": "after_end"}
+    assert by_id(results)["test_x"]["visibility"] == dict.fromkeys(("score", "feedback", "stdout", "error"), "after_end")
 
 
 def test_results_are_ordered_by_number(pytester):
@@ -242,15 +243,15 @@ def test_defaults_are_explicit_in_signatures():
     assert inspect.signature(p.item).parameters["points"].default == 0.0
     assert inspect.signature(p.timeout).parameters["seconds"].default == 10.0
     vis = inspect.signature(p.visibility).parameters
-    assert vis["score"].default is p.Visibility.VISIBLE
-    assert vis["output"].default is p.Visibility.AFTER_END
+    for part in ("score", "feedback", "stdout", "error"):
+        assert vis[part].default is p.Visibility.VISIBLE
 
 
 def test_mixing_a_level_with_parts_is_rejected():
     from pedagog_pytest import AFTER_END, HIDDEN, visibility
 
     with pytest.raises(TypeError):
-        visibility(AFTER_END, output=HIDDEN)
+        visibility(AFTER_END, error=HIDDEN)
 
 
 @pytest.mark.parametrize(
@@ -323,8 +324,8 @@ def test_rubric_item_scores_only_what_is_awarded(pytester):
     assert t["test_full_adds_the_rest"]["score"] == 10.0
     assert t["test_set_replaces"]["score"] == 2.5
     assert t["test_nil_resets"]["score"] == 0.0
-    assert "items" not in t["test_full"]
-    assert t["test_full"]["clamp"] == [0.0, 10.0]
+    assert len(t["test_full"]["items"]) == 1, "a single rubric item is the test's one item"
+    assert t["test_full"]["items"][0]["clamp"] == [0.0, 10.0]
     assert results["summary"] == {"score": 32.5, "total": 70.0}
 
 
@@ -375,8 +376,9 @@ def test_clamp_applies_once_to_the_final_total(pytester):
     assert t["test_capped_at_the_max"]["score"] == 4.0
     assert "final 6 -> clamped to 4" in t["test_capped_at_the_max"]["trace"]
     assert t["test_floored_at_zero"]["score"] == 0.0
-    assert (t["test_unbounded"]["score"], t["test_unbounded"]["clamp"]) == (5.0, [None, None])
-    assert (t["test_penalty"]["score"], t["test_penalty"]["max"], t["test_penalty"]["clamp"]) == (-3.0, 0.0, [None, 0.0])
+    assert (t["test_unbounded"]["score"], t["test_unbounded"]["items"][0]["clamp"]) == (5.0, [None, None])
+    penalty = t["test_penalty"]
+    assert (penalty["score"], penalty["max"], penalty["items"][0]["clamp"]) == (-3.0, 0.0, [None, 0.0])
     assert t["test_no_cap"]["score"] == 3.5
     assert t["test_custom_floor"]["score"] == 1.0
 
@@ -443,11 +445,12 @@ def test_rubric_items_nest_under_the_test(pytester):
     assert (t["id"], t["name"], t["status"], t["score"], t["max"]) == ("design", "Program design", "pass", 14.5, 15.0)
     assert t["items"] == [
         {"id": "memory_safe", "name": "Passes valgrind with no leaks", "score": 10.0, "max": 10.0,
-         "clamp": [0.0, 10.0], "extra-credit": "none", "attempted": True, "feedback": ""},
+         "clamp": [0.0, 10.0], "extra-credit": "none", "attempted": True, "steps": []},
         {"id": "no_globals", "name": "Avoids global state", "score": 2.5, "max": 5.0,
-         "clamp": [0.0, 5.0], "extra-credit": "none", "attempted": True, "feedback": "+2.5 one global left"},
+         "clamp": [0.0, 5.0], "extra-credit": "none", "attempted": True,
+         "steps": [{"points": 2.5, "reason": "one global left"}]},
         {"id": "uses-recursion", "name": "Uses recursion", "score": 2.0, "max": 2.0,
-         "clamp": [0.0, 2.0], "extra-credit": "bonus", "attempted": True, "feedback": ""},
+         "clamp": [0.0, 2.0], "extra-credit": "bonus", "attempted": True, "steps": []},
     ]
     assert results["summary"] == {"score": 14.5, "total": 15.0}
 
@@ -472,17 +475,20 @@ def test_check_blocks_add_up_and_keep_going(pytester):
     t = by_id(results)["test_design"]
     items = {i["id"]: i for i in t["items"]}
     assert items["memory_safe"]["score"] == 4.0, "a failed check doesn't wipe earlier points"
-    feedback = items["memory_safe"]["feedback"].splitlines()
-    assert feedback[0] == "✓ +4 no leaks on small input"
-    assert feedback[1] == "✗ +0 no leaks on large input (worth 6)"
-    assert feedback[2].startswith("  test_suite.py:") and "AssertionError: leaks found" in feedback[2]
-    assert "pedagog_pytest" not in items["memory_safe"]["feedback"]
+    assert items["memory_safe"]["steps"] == [
+        {"result": "pass", "points": 4.0, "worth": 4.0, "reason": "no leaks on small input"},
+        {"result": "fail", "points": 0.0, "worth": 6.0, "reason": "no leaks on large input", "message": "leaks found"},
+    ], "the assert's message, not pytest's values"
+    first = t["error"].split("\n\n")[0]
+    assert first.startswith("test_suite.py:") and "AssertionError: leaks found" in first
+    assert "pedagog_pytest" not in first
     # pytest.raises' "DID NOT RAISE" is a check failure too, not an aborted test.
     assert items["no_globals"]["score"] == 0.0
-    assert "DID NOT RAISE" in items["no_globals"]["feedback"]
+    assert items["no_globals"]["steps"] == [{"result": "fail", "points": 0.0, "worth": 5.0, "reason": "raises on bad input"}]
+    assert "DID NOT RAISE" in t["error"]
     assert items["uses-recursion"]["score"] == 1.0
     assert t["status"] == "fail"
-    assert "rubric checks failed: memory_safe, no_globals" in t["output"]
+    assert "rubric checks failed: memory_safe, no_globals" in t["error"]
     assert "status: fail (checks failed: memory_safe, no_globals)" in t["trace"]
     assert t["score"] == 5.0
 
@@ -504,11 +510,12 @@ def test_single_item_feedback_and_uncaught_failures(pytester):
     )
     t = by_id(results)["test_len"]
     assert t["score"] == 1.0 and t["status"] == "fail"
-    lines = t["feedback"].splitlines()
-    assert lines[0] == "+1 empty list"
-    assert lines[1] == "✗ +0 one item (worth 0.5)"
-    assert lines[-2] == "✗ test_suite.py:8: AssertionError: assert 3 == 2"
-    assert lines[-1] == "   +  where 3 = len([1, 2, 3])", "pytest's detail, indented"
+    assert t["items"][0]["steps"] == [
+        {"points": 1.0, "reason": "empty list"},
+        {"result": "fail", "points": 0.0, "worth": 0.5, "reason": "one item"},
+    ], "no assert message: pytest's values stay in the error"
+    assert "AssertionError: assert 1 == 2" in t["error"], "the failed check"
+    assert "assert 3 == 2" in t["error"] and "where 3 = len([1, 2, 3])" in t["error"], "the uncaught failure"
     assert "status: fail (test_suite.py:" in t["trace"]
 
 
@@ -618,9 +625,8 @@ def test_time_limits_are_not_swallowed_by_checks(pytester):
         """,
     )
     t = by_id(results)["test_hangs_in_check"]
-    assert t["status"] == "fail" and "time limit" in t["output"]
+    assert t["status"] == "fail" and "time limit" in t["error"]
     assert t["score"] == 0.0
-    assert "time limit" in t["feedback"]
 
 
 def test_conflicting_scoring_decorators_are_a_usage_error(pytester):
@@ -645,7 +651,7 @@ def test_conflicting_scoring_decorators_are_a_usage_error(pytester):
 def test_scoring_fixtures_need_their_decorator(pytester):
     results = run(pytester, "def test_x(score):\n    pass\n")
     t = by_id(results)["test_x"]
-    assert t["status"] == "error" and "needs @rubric_item" in t["output"]
+    assert t["status"] == "error" and "needs @rubric_item" in t["error"]
 
 
 def test_rubric_must_declare_items():
@@ -655,3 +661,68 @@ def test_rubric_must_declare_items():
 
         class Empty(Rubric):
             pass
+
+
+def test_steps_take_ids_unique_within_their_item(pytester):
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+
+        @rubric_item(points=3)
+        def test_ok(score: Score):
+            with score.check(points=1, reason="empty", id="empty"):
+                pass
+            score.award(2, reason="style", id="style")
+
+        @rubric_item(points=2)
+        def test_twice(score: Score):
+            with score.check(points=1, id="same"):
+                pass
+            with score.check(points=1, id="same"):
+                pass
+        """,
+    )
+    t = by_id(results)
+    assert [s.get("id") for s in t["test_ok"]["items"][0]["steps"]] == ["empty", "style"]
+    assert t["test_twice"]["status"] == "fail"
+    assert "step id 'same' is already used in item" in t["test_twice"]["error"]
+
+
+def test_assert_messages_from_student_code_are_not_the_instructors(pytester):
+    pytester.makepyfile(student="def check_sorted(xs):\n    assert xs == sorted(xs), 'mine'\n")
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+        from student import check_sorted
+
+        @rubric_item(points=2)
+        def test_sorted(score: Score):
+            with score.check(points=1, reason="theirs"):
+                check_sorted([2, 1])
+            with score.check(points=1, reason="ours"):
+                assert [2, 1] == [1, 2], "sort() should order the list"
+        """,
+    )
+    steps = by_id(results)["test_sorted"]["items"][0]["steps"]
+    assert "message" not in steps[0], "raised in student code"
+    assert steps[1]["message"] == "sort() should order the list"
+
+
+def test_set_and_nil_stay_in_the_trace(pytester):
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import Score, rubric_item
+
+        @rubric_item(points=4)
+        def test_x(score: Score):
+            score.award(3, reason="kept")
+            score.nil()
+            score.set(2, reason="computed")
+        """,
+    )
+    t = by_id(results)["test_x"]
+    assert t["items"][0]["steps"] == [], "nil clears; set isn't feedback"
+    assert "set 2  computed" in t["trace"]
