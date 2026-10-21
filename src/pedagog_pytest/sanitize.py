@@ -62,10 +62,13 @@ def _is_student(filename: str, root: Path | None) -> bool:
 
 
 def scrub(text: str) -> str:
-    """Values without addresses (``<LinkedList>``), and without pytest's advice."""
+    """Values without addresses (``<LinkedList>``), and without pytest's advice or
+    its full diff (verbose runs and CI), which repeats what's above it."""
     text = _BOUND.sub(lambda m: m["name"], text)
     text = _OBJECT.sub(lambda m: f"<{m['cls']}>", text)
     lines = [ln.rstrip() for ln in text.splitlines()]
+    if "Full diff:" in (ln.strip() for ln in lines):
+        lines = lines[: [ln.strip() for ln in lines].index("Full diff:")]
     return "\n".join(ln for ln in lines if ln.strip() and ln.strip() != "Use -v to get more diff")
 
 

@@ -119,6 +119,12 @@ def test_runaway_recursion_folds_to_one_frame(pytester):
     assert len(folded) == 1 and len(chain.splitlines()) < 8, chain
 
 
+def test_pytests_full_diff_is_left_out(pytester, monkeypatch):
+    monkeypatch.setenv("CI", "true")  # pytest shows full diffs on CI
+    got = sanitized(pytester, "def test_lists():\n    assert [2, 1] == [1, 2]\n")
+    assert "Full diff" not in got["test_lists"], got["test_lists"]
+
+
 def test_in_the_test_only_the_summary(pytester):
     got = sanitized(
         pytester,
