@@ -12,19 +12,27 @@ default report), then with `--tb=short` and `--tb=line`.
 
 ```
 test_failures.py:18: AssertionError: assert 2 == 3
- +  where 2 = len(<linked_list.LinkedList object at 0xffffadb5dd80>)
- +    where <linked_list.LinkedList object at 0xffffadb5dd80> = filled(1, 2, 3)
+ +  where 2 = len(<linked_list.LinkedList object at 0xffffbca2ea80>)
+ +    where <linked_list.LinkedList object at 0xffffbca2ea80> = filled(1, 2, 3)
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+test_failures.py:18: assert 2 == 3
+ +  where 2 = len(<LinkedList>)
+ +    where <LinkedList> = filled(1, 2, 3)
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_assert_comparing_values():
         """1. An assert comparing values (pytest explains them)."""
 >       assert len(filled(1, 2, 3)) == 3
 E       assert 2 == 3
-E        +  where 2 = len(<linked_list.LinkedList object at 0xffffadb5dd80>)
-E        +    where <linked_list.LinkedList object at 0xffffadb5dd80> = filled(1, 2, 3)
+E        +  where 2 = len(<linked_list.LinkedList object at 0xffffbca2ea80>)
+E        +    where <linked_list.LinkedList object at 0xffffbca2ea80> = filled(1, 2, 3)
 
 /src/corpus/tests/test_failures.py:18: AssertionError
 ```
@@ -35,16 +43,16 @@ E        +    where <linked_list.LinkedList object at 0xffffadb5dd80> = filled(1
 /src/corpus/tests/test_failures.py:18: in test_assert_comparing_values
     assert len(filled(1, 2, 3)) == 3
 E   assert 2 == 3
-E    +  where 2 = len(<linked_list.LinkedList object at 0xffffbc9b1540>)
-E    +    where <linked_list.LinkedList object at 0xffffbc9b1540> = filled(1, 2, 3)
+E    +  where 2 = len(<linked_list.LinkedList object at 0xffff812d3a40>)
+E    +    where <linked_list.LinkedList object at 0xffff812d3a40> = filled(1, 2, 3)
 ```
 
 **`error` with `--tb=line`:**
 
 ```
 E   assert 2 == 3
-     +  where 2 = len(<linked_list.LinkedList object at 0xffffb4a714e0>)
-     +    where <linked_list.LinkedList object at 0xffffb4a714e0> = filled(1, 2, 3)
+     +  where 2 = len(<linked_list.LinkedList object at 0xffff9dc03a40>)
+     +    where <linked_list.LinkedList object at 0xffff9dc03a40> = filled(1, 2, 3)
 ```
 
 ## 2. An assert with the instructor's message.
@@ -61,7 +69,15 @@ assert [2, 1] == [1, 2]
   Use -v to get more diff
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+test_failures.py:23: to_list() should keep insertion order
+assert [2, 1] == [1, 2]
+  At index 0 diff: 2 != 1
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_assert_with_a_message():
@@ -100,7 +116,7 @@ E   AssertionError: to_list() should keep insertion order
 
 ## 3. An exception raised in the student's code.
 
-`test_failures.py::test_exception_in_student_code` · status `fail` · 15 lines of `error`
+`test_failures.py::test_exception_in_student_code` · status `fail` · 16 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
@@ -108,7 +124,18 @@ E   AssertionError: to_list() should keep insertion order
 ../student/linked_list.py:33: AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+linked_list.py:33: AttributeError: 'NoneType' object has no attribute 'value'
+
+test_failures.py:28, in test_exception_in_student_code
+    filled().pop_front()
+linked_list.py:33, in pop_front
+    value = self.head.value
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_exception_in_student_code():
@@ -118,11 +145,12 @@ def test_exception_in_student_code():
 /src/corpus/tests/test_failures.py:28: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadb5d690>
+self = <linked_list.LinkedList object at 0xffffbca76ff0>
 
     def pop_front(self):
         # Bug: no empty check, so an empty list raises AttributeError.
 >       value = self.head.value
+                ^^^^^^^^^^^^^^^
 E       AttributeError: 'NoneType' object has no attribute 'value'
 
 /src/corpus/student/linked_list.py:33: AttributeError
@@ -135,6 +163,7 @@ E       AttributeError: 'NoneType' object has no attribute 'value'
     filled().pop_front()
 /src/corpus/student/linked_list.py:33: in pop_front
     value = self.head.value
+            ^^^^^^^^^^^^^^^
 E   AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
@@ -146,7 +175,7 @@ E   AttributeError: 'NoneType' object has no attribute 'value'
 
 ## 4. An exception in the test itself (a method the student didn't write).
 
-`test_failures.py::test_exception_in_the_test` · status `fail` · 6 lines of `error`
+`test_failures.py::test_exception_in_the_test` · status `fail` · 7 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
@@ -154,12 +183,19 @@ E   AttributeError: 'NoneType' object has no attribute 'value'
 test_failures.py:33: AttributeError: 'LinkedList' object has no attribute 'reverse'
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+test_failures.py:33: AttributeError: 'LinkedList' object has no attribute 'reverse'
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_exception_in_the_test():
         """4. An exception in the test itself (a method the student didn't write)."""
 >       filled(1, 2).reverse()
+        ^^^^^^^^^^^^^^^^^^^^
 E       AttributeError: 'LinkedList' object has no attribute 'reverse'
 
 /src/corpus/tests/test_failures.py:33: AttributeError
@@ -170,6 +206,7 @@ E       AttributeError: 'LinkedList' object has no attribute 'reverse'
 ```
 /src/corpus/tests/test_failures.py:33: in test_exception_in_the_test
     filled(1, 2).reverse()
+    ^^^^^^^^^^^^^^^^^^^^
 E   AttributeError: 'LinkedList' object has no attribute 'reverse'
 ```
 
@@ -181,7 +218,7 @@ E   AttributeError: 'LinkedList' object has no attribute 'reverse'
 
 ## 5. An expected exception that never came.
 
-`test_failures.py::test_expected_exception_missing` · status `fail` · 6 lines of `error`
+`test_failures.py::test_expected_exception_missing` · status `fail` · 7 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
@@ -189,12 +226,19 @@ E   AttributeError: 'LinkedList' object has no attribute 'reverse'
 test_failures.py:38: Failed: DID NOT RAISE <class 'ValueError'>
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+test_failures.py:38: expected ValueError, but nothing was raised
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_expected_exception_missing():
         """5. An expected exception that never came."""
 >       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
 E       Failed: DID NOT RAISE <class 'ValueError'>
 
 /src/corpus/tests/test_failures.py:38: Failed
@@ -205,6 +249,7 @@ E       Failed: DID NOT RAISE <class 'ValueError'>
 ```
 /src/corpus/tests/test_failures.py:38: in test_expected_exception_missing
     with pytest.raises(ValueError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
 E   Failed: DID NOT RAISE <class 'ValueError'>
 ```
 
@@ -223,19 +268,29 @@ E   Failed: DID NOT RAISE <class 'ValueError'>
 ```
 test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffffadde74f0>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffffbcab8e30>.pop_front
 test_failures.py:54: AssertionError: assert [2] == [3]
   
   At index 0 diff: 2 != 3
   Use -v to get more diff
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+test_failures.py:52: assert 1 == 2
+ +  where 1 = pop_front()
+ +    where pop_front = <LinkedList>.pop_front
+test_failures.py:54: assert [2] == [3]
+  At index 0 diff: 2 != 3
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffffadde74f0>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffffbcab8e30>.pop_front
 
 test_failures.py:54: AssertionError: assert [2] == [3]
   
@@ -250,7 +305,7 @@ rubric checks failed: front, order
 ```
 test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffffbc79d810>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffff81330e90>.pop_front
 
 test_failures.py:54: AssertionError: assert [2] == [3]
   
@@ -265,7 +320,7 @@ rubric checks failed: front, order
 ```
 test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffffb483c4c0>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffff9dbf8b30>.pop_front
 
 test_failures.py:54: AssertionError: assert [2] == [3]
   
@@ -285,7 +340,13 @@ rubric checks failed: front, order
 test_failures.py:59: ConnectionError: the course's test server is down
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+The tests couldn't set up; this isn't your code.
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 @pytest.fixture
@@ -312,7 +373,7 @@ E   ConnectionError: the course's test server is down
 
 ## 8. A failure deep in the student's code (a long traceback).
 
-`test_failures.py::test_deep_recursion` · status `fail` · 47 lines of `error`
+`test_failures.py::test_deep_recursion` · status `fail` · 51 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
@@ -320,7 +381,22 @@ E   ConnectionError: the course's test server is down
 ../student/linked_list.py:54: AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+linked_list.py:54: AttributeError: 'NoneType' object has no attribute 'value'
+
+test_failures.py:68, in test_deep_recursion
+    filled(1, 2).find(3)
+linked_list.py:50, in find
+    return self._find(self.head, value)
+linked_list.py:56, in _find (×2)
+    return self._find(node.next, value)
+linked_list.py:54, in _find
+    if node.value == value:
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 def test_deep_recursion():
@@ -330,43 +406,47 @@ def test_deep_recursion():
 /src/corpus/tests/test_failures.py:68: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadc70400>, value = 3
+self = <linked_list.LinkedList object at 0xffffbcaba000>, value = 3
 
     def find(self, value):
 >       return self._find(self.head, value)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 /src/corpus/student/linked_list.py:50: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadc70400>
-node = <linked_list._Node object at 0xffffadc70490>, value = 3
+self = <linked_list.LinkedList object at 0xffffbcaba000>
+node = <linked_list._Node object at 0xffffbcaba090>, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
         if node.value == value:
             return node
 >       return self._find(node.next, value)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 /src/corpus/student/linked_list.py:56: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadc70400>
-node = <linked_list._Node object at 0xffffadc71300>, value = 3
+self = <linked_list.LinkedList object at 0xffffbcaba000>
+node = <linked_list._Node object at 0xffffbcaba120>, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
         if node.value == value:
             return node
 >       return self._find(node.next, value)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 /src/corpus/student/linked_list.py:56: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadc70400>, node = None, value = 3
+self = <linked_list.LinkedList object at 0xffffbcaba000>, node = None, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
 >       if node.value == value:
+           ^^^^^^^^^^
 E       AttributeError: 'NoneType' object has no attribute 'value'
 
 /src/corpus/student/linked_list.py:54: AttributeError
@@ -379,12 +459,16 @@ E       AttributeError: 'NoneType' object has no attribute 'value'
     filled(1, 2).find(3)
 /src/corpus/student/linked_list.py:50: in find
     return self._find(self.head, value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 /src/corpus/student/linked_list.py:56: in _find
     return self._find(node.next, value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 /src/corpus/student/linked_list.py:56: in _find
     return self._find(node.next, value)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 /src/corpus/student/linked_list.py:54: in _find
     if node.value == value:
+       ^^^^^^^^^^
 E   AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
@@ -409,11 +493,21 @@ test_failures.py:76: AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
   ? ^         ^
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
 
 ```
-score = <pedagog_pytest.scoring.Score object at 0xffffadde62c0>
-capsys = <_pytest.capture.CaptureFixture object at 0xffffadde6560>
+test_failures.py:76: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
+  - 1 -> 2 -> 3
+  ? ^         ^
+  + 3 -> 2 -> 1
+  ? ^         ^
+```
+
+**`error`** (`--tb=long`, the default; staff):
+
+```
+score = <pedagog_pytest.scoring.Score object at 0xffffbcabb860>
+capsys = <_pytest.capture.CaptureFixture object at 0xffffbcabb890>
 
     @rubric_item("prints the list", points=1, id="show")
     def test_wrong_output(score: Score, capsys):
@@ -457,7 +551,7 @@ E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 
 ## 10. A test that runs past its time limit.
 
-`test_failures.py::test_timeout` · status `fail` · 24 lines of `error`
+`test_failures.py::test_timeout` · status `fail` · 25 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
@@ -465,7 +559,18 @@ E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 ../student/linked_list.py:70: TestTimeout: test exceeded its 1s time limit
 ```
 
-**`error` today** (`--tb=long`, the default):
+**`error-sanitized`** (what students get):
+
+```
+linked_list.py:70: ran past its 1 s time limit
+
+test_failures.py:83, in test_timeout
+    filled(1).spin()
+linked_list.py:70, in spin
+    while True:
+```
+
+**`error`** (`--tb=long`, the default; staff):
 
 ```
 @timeout(1)
@@ -476,22 +581,23 @@ E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 /src/corpus/tests/test_failures.py:83: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffffadc712a0>
+self = <linked_list.LinkedList object at 0xffffbcabc3e0>
 
     def spin(self):
 >       while True:
+              ^^^^
 
 /src/corpus/student/linked_list.py:70: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 signum = 14
-frame = <frame at 0xffffada80f40, file '/src/corpus/student/linked_list.py', line 70, code spin>
+frame = <frame at 0xffffbc777eb0, file '/src/corpus/student/linked_list.py', line 70, code spin>
 
     def on_alarm(signum: int, frame: FrameType | None) -> None:
 >       raise TestTimeout(f"test exceeded its {seconds:g}s time limit")
 E       pedagog_pytest.plugin.TestTimeout: test exceeded its 1s time limit
 
-/usr/local/lib/python3.10/site-packages/pedagog_pytest/plugin.py:224: TestTimeout
+/usr/local/lib/python3.12/site-packages/pedagog_pytest/plugin.py:231: TestTimeout
 ```
 
 **`error` with `--tb=short`:**
@@ -501,7 +607,8 @@ E       pedagog_pytest.plugin.TestTimeout: test exceeded its 1s time limit
     filled(1).spin()
 /src/corpus/student/linked_list.py:70: in spin
     while True:
-/usr/local/lib/python3.10/site-packages/pedagog_pytest/plugin.py:224: in on_alarm
+          ^^^^
+/usr/local/lib/python3.12/site-packages/pedagog_pytest/plugin.py:231: in on_alarm
     raise TestTimeout(f"test exceeded its {seconds:g}s time limit")
 E   pedagog_pytest.plugin.TestTimeout: test exceeded its 1s time limit
 ```
@@ -514,25 +621,36 @@ E   pedagog_pytest.plugin.TestTimeout: test exceeded its 1s time limit
 
 ## 11. A syntax error in the student's file
 
-The whole run is an error (`run.status` `error`); `run.output`:
+The whole run is an error (`run.status` `error`).
+
+**`run.output-sanitized`** (what students get):
+
+```
+linked_list.py, line 2: SyntaxError: expected ':'
+    def append(self, value)
+                           ^
+```
+
+**`run.output`** (staff):
 
 ```
 test_failures.py:
-/usr/local/lib/python3.10/site-packages/_pytest/python.py:498: in importtestmodule
+/usr/local/lib/python3.12/site-packages/_pytest/python.py:498: in importtestmodule
     mod = import_path(
-/usr/local/lib/python3.10/site-packages/_pytest/pathlib.py:587: in import_path
+/usr/local/lib/python3.12/site-packages/_pytest/pathlib.py:587: in import_path
     importlib.import_module(module_name)
-/usr/local/lib/python3.10/importlib/__init__.py:126: in import_module
+/usr/local/lib/python3.12/importlib/__init__.py:90: in import_module
     return _bootstrap._gcd_import(name[level:], package, level)
-<frozen importlib._bootstrap>:1050: in _gcd_import
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1387: in _gcd_import
     ???
-<frozen importlib._bootstrap>:1027: in _find_and_load
+<frozen importlib._bootstrap>:1360: in _find_and_load
     ???
-<frozen importlib._bootstrap>:1006: in _find_and_load_unlocked
+<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked
     ???
-<frozen importlib._bootstrap>:688: in _load_unlocked
+<frozen importlib._bootstrap>:935: in _load_unlocked
     ???
-/usr/local/lib/python3.10/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
+/usr/local/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:186: in exec_module
     exec(co, module.__dict__)
 /src/corpus/tests/test_failures.py:6: in <module>
     from linked_list import LinkedList

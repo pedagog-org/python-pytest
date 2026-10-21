@@ -352,3 +352,77 @@ def test_check_feedback_points_at_the_test_and_the_student_code(pytester, runner
     if sys.version_info >= (3, 11):  # exception notes
         assert "student code traceback:" in error and "linked_list.py" in error
     assert "rpyc" not in error and "pedagog_pytest" not in error.split("\n\n")[0]
+
+
+def run_doc(pytester, source: str) -> dict:
+    pytester.makepyfile(test_suite=textwrap.dedent(source))
+    out = pytester.path / "results.yaml"
+    pytester.runpytest_subprocess("--pedagog-results", str(out))
+    return json.loads(out.read_text())
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="the student's frames come as exception notes (3.11+)")
+def test_sanitized_errors_point_into_student_code_across_the_boundary(pytester, runner):
+    runner(buggy="def divide(a, b):\n    return helper(a, b)\n\ndef helper(a, b):\n    return a / b\n")
+    results = run(
+        pytester,
+        """
+        from buggy import divide
+
+        def test_divide():
+            divide(1, 0)
+        """,
+    )
+    assert results["test_divide"]["error-sanitized"] == (
+        "buggy.py:5: ZeroDivisionError: division by zero\n"
+        "\n"
+        "test_suite.py:4, in test_divide\n"
+        "    divide(1, 0)\n"
+        "buggy.py:2, in divide\n"
+        "    return helper(a, b)\n"
+        "buggy.py:5, in helper\n"
+        "    return a / b"
+    )
+
+
+def test_a_timeout_across_the_boundary_is_plain(pytester, runner):
+    runner(spin="def forever():\n    while True:\n        pass\n")
+    results = run(
+        pytester,
+        """
+        from pedagog_pytest import timeout
+        from spin import forever
+
+        @timeout(0.5)
+        def test_hangs():
+            forever()
+        """,
+    )
+    summary = results["test_hangs"]["error-sanitized"].split("\n\n")[0]
+    assert summary == "test_suite.py:6: ran past its 0.5 s time limit"
+    assert "rpyc" not in results["test_hangs"]["error-sanitized"]
+
+
+def test_a_student_process_that_dies_is_said_plainly(pytester, runner):
+    runner(crash="import os\n\ndef die():\n    os._exit(3)\n")
+    results = run(
+        pytester,
+        """
+        from crash import die
+
+        def test_dies():
+            die()
+        """,
+    )
+    summary = results["test_dies"]["error-sanitized"].split("\n\n")[0]
+    assert summary.startswith("test_suite.py:4: ran past its ") and summary.endswith(
+        " time limit or stopped unexpectedly"
+    ), summary
+
+
+def test_a_syntax_error_across_the_boundary_is_named(pytester, runner):
+    runner(broken="def append(self, value)\n    pass\n")
+    doc = run_doc(pytester, "from broken import append\n\ndef test_a():\n    pass\n")
+    assert doc["run"]["status"] == "error"
+    assert doc["run"]["output-sanitized"].splitlines()[0] == "broken.py, line 1: SyntaxError: expected ':'"
+    assert "Derived" not in doc["run"]["output-sanitized"]
