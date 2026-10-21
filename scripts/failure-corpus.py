@@ -3,6 +3,7 @@ student sees today (`error`, pytest's default report), the same with
 --tb=short and --tb=line, and the short description the helper already
 computes (describe_failure, plus failed checks'). In-process (no isolation).
     python scripts/failure-corpus.py
+    python scripts/failure-corpus.py --from results.json [broken-results.json]
 """
 
 import json
@@ -48,6 +49,30 @@ def block(text: str) -> str:
     return "```\n" + (text.rstrip() or "(empty)") + "\n```\n"
 
 
+def from_results(results: Path, broken: Path | None) -> None:
+    """corpus/REPORT-isolated.md from a real grading's results (the corpus graded on
+    a cluster under process isolation), and optionally the broken file's run."""
+    r = json.loads(results.read_text())
+    lines = ["# Failure corpus, graded under process isolation\n",
+             "From a real grading run (validation of the corpus as an assignment). `error` as",
+             "students would see it today, and the trace's status line (what `describe_failure`",
+             "made of it).\n"]
+    for t in r["tests"]:
+        lines.append(f"## {t['name']}\n")
+        lines.append(f"`{t['node']}` · status `{t['status']}` · {len(t['error'].splitlines())} lines of `error`\n")
+        lines.append("**Computed short description** (from the trace):\n")
+        lines.append(block(t["trace"].splitlines()[-1].strip().removeprefix("status: ")))
+        lines.append("**`error` today:**\n")
+        lines.append(block(t["error"]))
+    if broken is not None:
+        b = json.loads(broken.read_text())
+        lines.append("## 11. A syntax error in the student's file\n")
+        lines.append(f"`run.status` `{b['run']['status']}`; `run.output`:\n")
+        lines.append(block(b["run"]["output"]))
+    (CORPUS / "REPORT-isolated.md").write_text("\n".join(lines))
+    print(CORPUS / "REPORT-isolated.md")
+
+
 def main() -> None:
     modes = {tb: run(CORPUS / "student", tb) for tb in ["long", "short", "line"]}
     long_results, spy = modes["long"]
@@ -78,4 +103,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # --from RESULTS [BROKEN]: format a real grading's results instead of running.
+    if len(sys.argv) > 2 and sys.argv[1] == "--from":
+        from_results(Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) > 3 else None)
+    else:
+        main()

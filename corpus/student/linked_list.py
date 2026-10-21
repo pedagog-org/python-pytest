@@ -34,6 +34,18 @@ class LinkedList:
         self.head = self.head.next
         return value
 
+    def remove(self, value):
+        # Bug: a missing value is silently ignored instead of raising ValueError.
+        prev, cur = None, self.head
+        while cur is not None and cur.value != value:
+            prev, cur = cur, cur.next
+        if cur is None:
+            return
+        if prev is None:
+            self.head = cur.next
+        else:
+            prev.next = cur.next
+
     def find(self, value):
         return self._find(self.head, value)
 

@@ -35,10 +35,8 @@ def test_exception_in_the_test():
 
 def test_expected_exception_missing():
     """5. An expected exception that never came."""
-    items = filled(1)
-    items.pop_front()
-    with pytest.raises(IndexError):
-        items.head = object()  # stands in for a pop that returns None quietly
+    with pytest.raises(ValueError):
+        filled(1, 2).remove(9)
 
 
 class PopFront(Rubric):
@@ -66,13 +64,14 @@ def test_setup_error(server):
 
 
 def test_deep_recursion():
-    """8. A RecursionError deep in the student's code (a long traceback)."""
+    """8. A failure deep in the student's code (a long traceback)."""
     filled(1, 2).find(3)
 
 
 @rubric_item("prints the list", points=1, id="show")
 def test_wrong_output(score: Score, capsys):
-    """9. Comparing printed output."""
+    """9. Comparing printed output (under process isolation, capsys doesn't see the
+    student's prints: they happen in the other process)."""
     filled(1, 2, 3).show()
     assert capsys.readouterr().out == "1 -> 2 -> 3\n"
     score.award()

@@ -12,8 +12,8 @@ default report), then with `--tb=short` and `--tb=line`.
 
 ```
 test_failures.py:18: AssertionError: assert 2 == 3
- +  where 2 = len(<linked_list.LinkedList object at 0xffff8076d1e0>)
- +    where <linked_list.LinkedList object at 0xffff8076d1e0> = filled(1, 2, 3)
+ +  where 2 = len(<linked_list.LinkedList object at 0xffffadb5dd80>)
+ +    where <linked_list.LinkedList object at 0xffffadb5dd80> = filled(1, 2, 3)
 ```
 
 **`error` today** (`--tb=long`, the default):
@@ -23,8 +23,8 @@ def test_assert_comparing_values():
         """1. An assert comparing values (pytest explains them)."""
 >       assert len(filled(1, 2, 3)) == 3
 E       assert 2 == 3
-E        +  where 2 = len(<linked_list.LinkedList object at 0xffff8076d1e0>)
-E        +    where <linked_list.LinkedList object at 0xffff8076d1e0> = filled(1, 2, 3)
+E        +  where 2 = len(<linked_list.LinkedList object at 0xffffadb5dd80>)
+E        +    where <linked_list.LinkedList object at 0xffffadb5dd80> = filled(1, 2, 3)
 
 /src/corpus/tests/test_failures.py:18: AssertionError
 ```
@@ -35,16 +35,16 @@ E        +    where <linked_list.LinkedList object at 0xffff8076d1e0> = filled(1
 /src/corpus/tests/test_failures.py:18: in test_assert_comparing_values
     assert len(filled(1, 2, 3)) == 3
 E   assert 2 == 3
-E    +  where 2 = len(<linked_list.LinkedList object at 0xffff91f91570>)
-E    +    where <linked_list.LinkedList object at 0xffff91f91570> = filled(1, 2, 3)
+E    +  where 2 = len(<linked_list.LinkedList object at 0xffffbc9b1540>)
+E    +    where <linked_list.LinkedList object at 0xffffbc9b1540> = filled(1, 2, 3)
 ```
 
 **`error` with `--tb=line`:**
 
 ```
 E   assert 2 == 3
-     +  where 2 = len(<linked_list.LinkedList object at 0xffff957b1480>)
-     +    where <linked_list.LinkedList object at 0xffff957b1480> = filled(1, 2, 3)
+     +  where 2 = len(<linked_list.LinkedList object at 0xffffb4a714e0>)
+     +    where <linked_list.LinkedList object at 0xffffb4a714e0> = filled(1, 2, 3)
 ```
 
 ## 2. An assert with the instructor's message.
@@ -118,7 +118,7 @@ def test_exception_in_student_code():
 /src/corpus/tests/test_failures.py:28: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff8059ac80>
+self = <linked_list.LinkedList object at 0xffffadb5d690>
 
     def pop_front(self):
         # Bug: no empty check, so an empty list raises AttributeError.
@@ -181,12 +181,12 @@ E   AttributeError: 'LinkedList' object has no attribute 'reverse'
 
 ## 5. An expected exception that never came.
 
-`test_failures.py::test_expected_exception_missing` · status `fail` · 8 lines of `error`
+`test_failures.py::test_expected_exception_missing` · status `fail` · 6 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-test_failures.py:40: Failed: DID NOT RAISE <class 'IndexError'>
+test_failures.py:38: Failed: DID NOT RAISE <class 'ValueError'>
 ```
 
 **`error` today** (`--tb=long`, the default):
@@ -194,26 +194,24 @@ test_failures.py:40: Failed: DID NOT RAISE <class 'IndexError'>
 ```
 def test_expected_exception_missing():
         """5. An expected exception that never came."""
-        items = filled(1)
-        items.pop_front()
->       with pytest.raises(IndexError):
-E       Failed: DID NOT RAISE <class 'IndexError'>
+>       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE <class 'ValueError'>
 
-/src/corpus/tests/test_failures.py:40: Failed
+/src/corpus/tests/test_failures.py:38: Failed
 ```
 
 **`error` with `--tb=short`:**
 
 ```
-/src/corpus/tests/test_failures.py:40: in test_expected_exception_missing
-    with pytest.raises(IndexError):
-E   Failed: DID NOT RAISE <class 'IndexError'>
+/src/corpus/tests/test_failures.py:38: in test_expected_exception_missing
+    with pytest.raises(ValueError):
+E   Failed: DID NOT RAISE <class 'ValueError'>
 ```
 
 **`error` with `--tb=line`:**
 
 ```
-E   Failed: DID NOT RAISE <class 'IndexError'>
+E   Failed: DID NOT RAISE <class 'ValueError'>
 ```
 
 ## pop_front checks
@@ -223,10 +221,10 @@ E   Failed: DID NOT RAISE <class 'IndexError'>
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-test_failures.py:54: AssertionError: assert 1 == 2
+test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffff804ddcc0>.pop_front
-test_failures.py:56: AssertionError: assert [2] == [3]
+ +    where pop_front = <linked_list.LinkedList object at 0xffffadde74f0>.pop_front
+test_failures.py:54: AssertionError: assert [2] == [3]
   
   At index 0 diff: 2 != 3
   Use -v to get more diff
@@ -235,11 +233,11 @@ test_failures.py:56: AssertionError: assert [2] == [3]
 **`error` today** (`--tb=long`, the default):
 
 ```
-test_failures.py:54: AssertionError: assert 1 == 2
+test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffff804ddcc0>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffffadde74f0>.pop_front
 
-test_failures.py:56: AssertionError: assert [2] == [3]
+test_failures.py:54: AssertionError: assert [2] == [3]
   
   At index 0 diff: 2 != 3
   Use -v to get more diff
@@ -250,11 +248,11 @@ rubric checks failed: front, order
 **`error` with `--tb=short`:**
 
 ```
-test_failures.py:54: AssertionError: assert 1 == 2
+test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffff91d79540>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffffbc79d810>.pop_front
 
-test_failures.py:56: AssertionError: assert [2] == [3]
+test_failures.py:54: AssertionError: assert [2] == [3]
   
   At index 0 diff: 2 != 3
   Use -v to get more diff
@@ -265,11 +263,11 @@ rubric checks failed: front, order
 **`error` with `--tb=line`:**
 
 ```
-test_failures.py:54: AssertionError: assert 1 == 2
+test_failures.py:52: AssertionError: assert 1 == 2
  +  where 1 = pop_front()
- +    where pop_front = <linked_list.LinkedList object at 0xffff9557c520>.pop_front
+ +    where pop_front = <linked_list.LinkedList object at 0xffffb483c4c0>.pop_front
 
-test_failures.py:56: AssertionError: assert [2] == [3]
+test_failures.py:54: AssertionError: assert [2] == [3]
   
   At index 0 diff: 2 != 3
   Use -v to get more diff
@@ -284,7 +282,7 @@ rubric checks failed: front, order
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-test_failures.py:61: ConnectionError: the course's test server is down
+test_failures.py:59: ConnectionError: the course's test server is down
 ```
 
 **`error` today** (`--tb=long`, the default):
@@ -295,13 +293,13 @@ test_failures.py:61: ConnectionError: the course's test server is down
 >       raise ConnectionError("the course's test server is down")
 E       ConnectionError: the course's test server is down
 
-/src/corpus/tests/test_failures.py:61: ConnectionError
+/src/corpus/tests/test_failures.py:59: ConnectionError
 ```
 
 **`error` with `--tb=short`:**
 
 ```
-/src/corpus/tests/test_failures.py:61: in server
+/src/corpus/tests/test_failures.py:59: in server
     raise ConnectionError("the course's test server is down")
 E   ConnectionError: the course's test server is down
 ```
@@ -312,36 +310,36 @@ E   ConnectionError: the course's test server is down
 E   ConnectionError: the course's test server is down
 ```
 
-## 8. A RecursionError deep in the student's code (a long traceback).
+## 8. A failure deep in the student's code (a long traceback).
 
 `test_failures.py::test_deep_recursion` · status `fail` · 47 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-../student/linked_list.py:42: AttributeError: 'NoneType' object has no attribute 'value'
+../student/linked_list.py:54: AttributeError: 'NoneType' object has no attribute 'value'
 ```
 
 **`error` today** (`--tb=long`, the default):
 
 ```
 def test_deep_recursion():
-        """8. A RecursionError deep in the student's code (a long traceback)."""
+        """8. A failure deep in the student's code (a long traceback)."""
 >       filled(1, 2).find(3)
 
-/src/corpus/tests/test_failures.py:70: 
+/src/corpus/tests/test_failures.py:68: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff80767b50>, value = 3
+self = <linked_list.LinkedList object at 0xffffadc70400>, value = 3
 
     def find(self, value):
 >       return self._find(self.head, value)
 
-/src/corpus/student/linked_list.py:38: 
+/src/corpus/student/linked_list.py:50: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff80767b50>
-node = <linked_list._Node object at 0xffff80767130>, value = 3
+self = <linked_list.LinkedList object at 0xffffadc70400>
+node = <linked_list._Node object at 0xffffadc70490>, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
@@ -349,11 +347,11 @@ node = <linked_list._Node object at 0xffff80767130>, value = 3
             return node
 >       return self._find(node.next, value)
 
-/src/corpus/student/linked_list.py:44: 
+/src/corpus/student/linked_list.py:56: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff80767b50>
-node = <linked_list._Node object at 0xffff80766350>, value = 3
+self = <linked_list.LinkedList object at 0xffffadc70400>
+node = <linked_list._Node object at 0xffffadc71300>, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
@@ -361,31 +359,31 @@ node = <linked_list._Node object at 0xffff80766350>, value = 3
             return node
 >       return self._find(node.next, value)
 
-/src/corpus/student/linked_list.py:44: 
+/src/corpus/student/linked_list.py:56: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff80767b50>, node = None, value = 3
+self = <linked_list.LinkedList object at 0xffffadc70400>, node = None, value = 3
 
     def _find(self, node, value):
         # Bug: never stops at the end.
 >       if node.value == value:
 E       AttributeError: 'NoneType' object has no attribute 'value'
 
-/src/corpus/student/linked_list.py:42: AttributeError
+/src/corpus/student/linked_list.py:54: AttributeError
 ```
 
 **`error` with `--tb=short`:**
 
 ```
-/src/corpus/tests/test_failures.py:70: in test_deep_recursion
+/src/corpus/tests/test_failures.py:68: in test_deep_recursion
     filled(1, 2).find(3)
-/src/corpus/student/linked_list.py:38: in find
+/src/corpus/student/linked_list.py:50: in find
     return self._find(self.head, value)
-/src/corpus/student/linked_list.py:44: in _find
+/src/corpus/student/linked_list.py:56: in _find
     return self._find(node.next, value)
-/src/corpus/student/linked_list.py:44: in _find
+/src/corpus/student/linked_list.py:56: in _find
     return self._find(node.next, value)
-/src/corpus/student/linked_list.py:42: in _find
+/src/corpus/student/linked_list.py:54: in _find
     if node.value == value:
 E   AttributeError: 'NoneType' object has no attribute 'value'
 ```
@@ -398,12 +396,12 @@ E   AttributeError: 'NoneType' object has no attribute 'value'
 
 ## prints the list
 
-`test_failures.py::test_wrong_output` · status `fail` · 16 lines of `error`
+`test_failures.py::test_wrong_output` · status `fail` · 17 lines of `error`
 
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-test_failures.py:77: AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
+test_failures.py:76: AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
   
   - 1 -> 2 -> 3
   ? ^         ^
@@ -414,12 +412,13 @@ test_failures.py:77: AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 **`error` today** (`--tb=long`, the default):
 
 ```
-score = <pedagog_pytest.scoring.Score object at 0xffff804df0d0>
-capsys = <_pytest.capture.CaptureFixture object at 0xffff804de230>
+score = <pedagog_pytest.scoring.Score object at 0xffffadde62c0>
+capsys = <_pytest.capture.CaptureFixture object at 0xffffadde6560>
 
     @rubric_item("prints the list", points=1, id="show")
     def test_wrong_output(score: Score, capsys):
-        """9. Comparing printed output."""
+        """9. Comparing printed output (under process isolation, capsys doesn't see the
+        student's prints: they happen in the other process)."""
         filled(1, 2, 3).show()
 >       assert capsys.readouterr().out == "1 -> 2 -> 3\n"
 E       AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
@@ -429,13 +428,13 @@ E         ? ^         ^
 E         + 3 -> 2 -> 1
 E         ? ^         ^
 
-/src/corpus/tests/test_failures.py:77: AssertionError
+/src/corpus/tests/test_failures.py:76: AssertionError
 ```
 
 **`error` with `--tb=short`:**
 
 ```
-/src/corpus/tests/test_failures.py:77: in test_wrong_output
+/src/corpus/tests/test_failures.py:76: in test_wrong_output
     assert capsys.readouterr().out == "1 -> 2 -> 3\n"
 E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 E     
@@ -463,7 +462,7 @@ E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
 **Computed short description** (`describe_failure`, failed checks first):
 
 ```
-../student/linked_list.py:58: TestTimeout: test exceeded its 1s time limit
+../student/linked_list.py:70: TestTimeout: test exceeded its 1s time limit
 ```
 
 **`error` today** (`--tb=long`, the default):
@@ -474,19 +473,19 @@ E   AssertionError: assert '3 -> 2 -> 1\n' == '1 -> 2 -> 3\n'
         """10. A test that runs past its time limit."""
 >       filled(1).spin()
 
-/src/corpus/tests/test_failures.py:84: 
+/src/corpus/tests/test_failures.py:83: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-self = <linked_list.LinkedList object at 0xffff805f14b0>
+self = <linked_list.LinkedList object at 0xffffadc712a0>
 
     def spin(self):
 >       while True:
 
-/src/corpus/student/linked_list.py:58: 
+/src/corpus/student/linked_list.py:70: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 signum = 14
-frame = <frame at 0xffff80400f40, file '/src/corpus/student/linked_list.py', line 58, code spin>
+frame = <frame at 0xffffada80f40, file '/src/corpus/student/linked_list.py', line 70, code spin>
 
     def on_alarm(signum: int, frame: FrameType | None) -> None:
 >       raise TestTimeout(f"test exceeded its {seconds:g}s time limit")
@@ -498,9 +497,9 @@ E       pedagog_pytest.plugin.TestTimeout: test exceeded its 1s time limit
 **`error` with `--tb=short`:**
 
 ```
-/src/corpus/tests/test_failures.py:84: in test_timeout
+/src/corpus/tests/test_failures.py:83: in test_timeout
     filled(1).spin()
-/src/corpus/student/linked_list.py:58: in spin
+/src/corpus/student/linked_list.py:70: in spin
     while True:
 /usr/local/lib/python3.10/site-packages/pedagog_pytest/plugin.py:224: in on_alarm
     raise TestTimeout(f"test exceeded its {seconds:g}s time limit")
