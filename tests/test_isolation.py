@@ -426,3 +426,85 @@ def test_a_syntax_error_across_the_boundary_is_named(pytester, runner):
     assert doc["run"]["status"] == "error"
     assert doc["run"]["output-sanitized"].splitlines()[0] == "broken.py, line 1: SyntaxError: expected ':'"
     assert "Derived" not in doc["run"]["output-sanitized"]
+
+
+CHATTY = """
+    import os
+    import subprocess
+    import sys
+
+    def greet(name):
+        print(f"hello, {name}")
+        print("careful", file=sys.stderr)
+        return len(name)
+
+    def low_level():
+        os.write(1, b"from os.write\\n")
+        subprocess.run([sys.executable, "-c", "print('from a subprocess')"], check=True)
+
+    def last_words():
+        print("about to go")
+        os._exit(3)
+
+    def flood():
+        sys.stdout.write("x" * (3 * 1024 * 1024))
+        return "done"
+"""
+
+
+def test_what_student_code_prints_reaches_the_test(pytester, runner):
+    runner(chatty=CHATTY)
+    results = run(
+        pytester,
+        """
+        from chatty import greet, low_level
+
+        def test_capsys_sees_it(capsys):
+            assert greet("ada") == 3
+            captured = capsys.readouterr()
+            assert captured.out == "hello, ada\\n"
+            assert captured.err == "careful\\n"
+
+        def test_fd_writes_and_subprocesses_too(capsys):
+            low_level()
+            assert capsys.readouterr().out == "from os.write\\nfrom a subprocess\\n"
+
+        def test_the_results_show_it():
+            greet("grace")
+        """,
+    )
+    assert_all_pass(results, "test_capsys_sees_it", "test_fd_writes_and_subprocesses_too", "test_the_results_show_it")
+    assert results["test_the_results_show_it"]["stdout"] == "hello, grace\n"
+
+
+def test_output_before_a_crash_is_kept(pytester, runner):
+    runner(chatty=CHATTY)
+    results = run(
+        pytester,
+        """
+        from chatty import last_words
+
+        def test_dies():
+            last_words()
+        """,
+    )
+    assert results["test_dies"]["status"] == "fail"
+    assert "about to go" in results["test_dies"]["stdout"]
+
+
+def test_a_flood_of_output_is_cut_and_never_blocks(pytester, runner):
+    runner(chatty=CHATTY)
+    results = run(
+        pytester,
+        """
+        from chatty import flood
+
+        def test_flood(capsys):
+            assert flood() == "done"
+            out = capsys.readouterr().out
+            assert out.startswith("x" * 1000)
+            assert out.endswith("(student output cut at 1 MiB)\\n")
+            assert out.count("x") == 1024 * 1024
+        """,
+    )
+    assert_all_pass(results, "test_flood")

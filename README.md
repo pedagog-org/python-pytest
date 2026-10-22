@@ -237,6 +237,10 @@ Rules:
   iteration, `len`, indexing all work); `isinstance`/`type()` checks against student classes
   don't, and student objects don't outlive the test that made them (so don't keep them in
   module- or session-scoped fixtures).
+- **Printed output comes back.** What student code prints (stdout and stderr, including
+  `os.write` and subprocesses) reaches the test after each call into it, so `capsys` and the
+  results' `stdout` see it, including what a process that crashed or timed out printed first.
+  Each stream keeps its first 1 MiB per test.
 - **Exceptions:** builtin exceptions raised by student code propagate with their type
   (`pytest.raises(ValueError)` works); custom student exception classes arrive as a generic
   remote error (match on the message instead).

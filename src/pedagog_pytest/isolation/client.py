@@ -21,6 +21,7 @@ import importlib.abc
 import importlib.machinery
 import os
 import re
+import socket
 import sys
 import threading
 import types
@@ -28,9 +29,11 @@ from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 import rpyc
-from rpyc.utils.factory import unix_connect
+from rpyc.core.stream import SocketStream
+from rpyc.utils.factory import connect_stream
 
 from .codec import NotPlain, decode, encode
+from .output import Output
 
 GRADER_CONFIG: dict[str, object] = {
     "allow_public_attrs": False,
@@ -124,6 +127,31 @@ def _check_reply(reply: object) -> tuple[str, str | int]:
     raise IsolationError("malformed reply from the student process")
 
 
+class _Root:
+    """The runner's methods; after each call, what student code printed is
+    written to the grader's stdout and stderr."""
+
+    def __init__(self, root: Any, output: Output) -> None:
+        self._root = root
+        self._output = output
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        method = getattr(self._root, name)
+
+        def call(*args: object) -> Any:
+            __tracebackhide__ = True
+            try:
+                return method(*args)
+            except EOFError:
+                # The student's process died mid-call: collect its last words.
+                self._output.finish()
+                raise
+            finally:
+                self._output.emit()
+
+        return call
+
+
 class Session:
     """One connection to the runner (one fresh student process)."""
 
@@ -131,8 +159,16 @@ class Session:
         config = dict(GRADER_CONFIG)
         # Leave the runner a moment to hit its own alarm first.
         config["sync_request_timeout"] = timeout + 2 if timeout > 0 else None
-        self.conn = unix_connect(socket_path, service=rpyc.VoidService, config=config)
-        self.root = self.conn.root
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(socket_path)
+            self.output = Output()
+            self.output.send(sock)
+        except BaseException:
+            sock.close()
+            raise
+        self.conn = connect_stream(SocketStream(sock), service=rpyc.VoidService, config=config)
+        self.root = _Root(self.conn.root, self.output)
         self.root.begin(timeout)
 
     def close(self) -> None:
@@ -140,6 +176,12 @@ class Session:
             self.conn.close()
         except Exception:
             pass
+        # Anything printed after the last call (or by a process that just died).
+        self.output.finish()
+        try:
+            self.output.emit()
+        finally:
+            self.output.close()
 
     def unpack(self, reply: object) -> Any:
         kind, value = _check_reply(reply)
