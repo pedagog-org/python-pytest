@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
+from .sanitize import combine, sanitize, sanitize_collection
 from .scoring import Rubric, Score, describe_failure
 
 if TYPE_CHECKING:
@@ -175,6 +176,12 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
         and not excinfo.errisinstance(pytest.skip.Exception)
     ):
         item.stash[FAILURE_KEY] = describe_failure(excinfo.value, item.config.rootpath)
+    recorder = item.config.pluginmanager.get_plugin("pedagog-results")
+    if excinfo is not None and report.failed and recorder is not None:
+        for_students = sanitize(excinfo.value, item.config.rootpath, call.when)
+        entry = recorder.entries.get(item.nodeid)
+        if for_students is not None and entry is not None:
+            entry.sanitized.append(for_students)
     return report
 
 
@@ -318,6 +325,8 @@ class _Entry:
     stdout: str = ""
     failure: str | None = None
     failed_checks: list[str] = field(default_factory=list)
+    # The test's own failures for students (its checks' are on its scores).
+    sanitized: list[str] = field(default_factory=list)
 
     def earned(self) -> float:
         return sum(s.final for s in self.scores)
@@ -337,6 +346,11 @@ class _Entry:
         """What went wrong: what failed checks raised, then pytest's reports."""
         failures = [f for s in self.scores for f in s.failures]
         return "\n\n".join([*failures, *self.reports])
+
+    def error_sanitized(self) -> str:
+        """What went wrong, for students: each failure's summary, then how it got there."""
+        failures = [f for s in self.scores for f in s.sanitized] + self.sanitized
+        return combine(failures) if failures else ""
 
     def status_reason(self) -> str:
         if self.status in ("pass", "skip"):
@@ -399,6 +413,7 @@ class _Entry:
             {
                 "stdout": self.stdout[:MAX_OUTPUT_CHARS],
                 "error": self.error()[:MAX_OUTPUT_CHARS],
+                "error-sanitized": self.error_sanitized()[:MAX_OUTPUT_CHARS],
                 "trace": self.trace()[:MAX_OUTPUT_CHARS],
                 "visibility": {part: self.visibility[part].value for part in PARTS},
             }
@@ -427,6 +442,11 @@ class ResultsRecorder:
         self.entries: dict[str, _Entry] = {}
         # Modules that couldn't be collected (e.g. student code that doesn't import).
         self.collection_errors: list[str] = []
+        self.collection_errors_sanitized: list[str] = []
+        self.root: Path | None = None
+
+    def pytest_sessionstart(self, session: pytest.Session) -> None:
+        self.root = session.config.rootpath
 
     def _next_order(self) -> int:
         return len(self.entries)
@@ -453,6 +473,7 @@ class ResultsRecorder:
         # run an error: its tests never ran, so it can't pass vacuously.
         if report.failed:
             self.collection_errors.append(f"{report.nodeid}:\n{report.longreprtext}")
+            self.collection_errors_sanitized.append(sanitize_collection(report.longreprtext, self.root))
 
     @pytest.hookimpl(trylast=True)
     def pytest_runtest_teardown(self, item: pytest.Item, nextitem: pytest.Item | None) -> None:
@@ -492,9 +513,12 @@ class ResultsRecorder:
             "submission-id": None,
             "run-id": None,
             # Whether every test could run, and what stopped them if not (for staff).
+            # Errors come for students too (error-sanitized, output-sanitized).
+            "sanitizes-errors": True,
             "run": {
                 "status": "error" if self.collection_errors else "complete",
                 "output": "\n\n".join(self.collection_errors)[:MAX_OUTPUT_CHARS],
+                "output-sanitized": "\n\n".join(self.collection_errors_sanitized)[:MAX_OUTPUT_CHARS],
             },
             "summary": {
                 "score": sum(e.earned() for e in entries),

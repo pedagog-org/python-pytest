@@ -181,6 +181,8 @@ class Score:
         self.steps: list[str] = []
         # What failed checks raised (the test's error).
         self.failures: list[str] = []
+        # The failures for students (see sanitize.py).
+        self.sanitized: list[str] = []
         self.failed_checks = 0
         # Set by the plugin: failure paths are shown relative to the test suite.
         self.root: Path | None = None
@@ -285,6 +287,11 @@ class Score:
             failure = describe_failure(e, self.root)
             self.failed_checks += 1
             self.failures.append(failure)
+            from .sanitize import sanitize  # sanitize imports this module
+
+            for_students = sanitize(e, self.root)
+            if for_students is not None:
+                self.sanitized.append(for_students)
             self.steps.append(f"check ✗ +0  {label}(worth {_num(worth)}): {type(e).__name__}  = {_num(self.total)}")
             step: dict[str, object] = {"result": "fail", "points": 0.0, "worth": worth}
             if reason:

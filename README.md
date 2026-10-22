@@ -118,11 +118,30 @@ courses can override it):
 | `score` | Points, and pass/fail |
 | `feedback` | The checks: each item's steps, with your reasons, and the message of a failed check's `assert` |
 | `stdout` | What the test printed: write here to tell students something (e.g. intermediate values) |
-| `error` | What went wrong: failures outside a `check()`, what failed checks raised, exceptions from the student's code, with pytest's values and tracebacks |
+| `error` | What went wrong: failures outside a `check()`, what failed checks raised, exceptions from the student's code |
+
+Students get the error sanitized (`error-sanitized`): where it happened (their line, when it
+was their code) and what, then the lines that led there, one line of code each; never the
+test's source, argument dumps, object addresses, absolute paths or the helper's, pytest's or
+Python's internals. A setup error in your fixtures reads "The tests couldn't set up; this
+isn't your code." Staff also get pytest's raw report (`error`).
+
+```
+linked_list.py:42: AttributeError: 'NoneType' object has no attribute 'value'
+
+test_linked_list.py:70, in test_find
+    items.find(3)
+linked_list.py:38, in find
+    return self._find(self.head, value)
+linked_list.py:44, in _find (×2)
+    return self._find(node.next, value)
+linked_list.py:42, in _find
+    if node.value == value:
+```
 
 Everything is visible by default except `error`, which waits for the deadline (`AFTER_END`):
-it can reveal what a test expects, since pytest shows the values it compared and the test's
-source. On exams, hide it: `@visibility(error=HIDDEN)`.
+it can still reveal what a test expects, since asserts show the values they compared. On
+exams, hide it: `@visibility(error=HIDDEN)`.
 
 Only what you write reaches feedback: a failed check's step carries its `assert` message
 (`assert len(ll) == 3, "len() should count every node"`), never pytest's values; an assert
@@ -165,17 +184,22 @@ sort — sort() (rubric Sorting)
 When `PEDAGOG_RESULTS_DIR` is set (pedagog sets it), or with `--pedagog-results PATH`, the
 plugin writes `results.yaml` (as JSON, which is valid YAML):
 
+- `sanitizes-errors: true`: the errors below come sanitized for students too;
 - `run`: `status` (`complete`, or `error` when tests couldn't all run, e.g. a module that
   fails to import because the student's code is broken: its tests never ran, so the run
-  can't pass vacuously) and `output` (what stopped them; for staff, never students);
+  can't pass vacuously), `output` (what stopped them, pytest's report; for staff) and
+  `output-sanitized` (the same for students: `linked_list.py, line 2: SyntaxError: expected
+  ':'` with the line and its caret);
 - one entry per test: `id` (only if declared), `node` (pytest node id), `name`, `status`
-  (`pass`/`fail`/`error`/`skip`), `score`, `max`, `stdout`, `error`, `trace`, `visibility`
+  (`pass`/`fail`/`error`/`skip`), `score`, `max`, `stdout`, `error`, `error-sanitized`,
+  `trace`, `visibility`
   (`score`, `feedback`, `stdout`, `error`), and optional `number` / `solution-expect`;
 - scored tests list their `items` (one for `@rubric_item`): `id`, `name`, `score`, `max`,
   `clamp`, `extra-credit`, `attempted`, and `steps` (the feedback);
 - `summary` totals the scores and maxes.
 
-Version 2 changed the format: `output` became `error`, text `feedback` became items'
+Version 2.2 added `error-sanitized`, `run.output-sanitized` and `sanitizes-errors`. Version 2
+changed the format: `output` became `error`, text `feedback` became items'
 `steps`, `<collection>` entries became `run`, and `@visibility(output=)` became four parts.
 pedagog reads both.
 

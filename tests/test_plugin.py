@@ -48,7 +48,10 @@ def test_defaults_for_passing_and_failing_tests(pytester):
     assert tests["test_bad"]["score"] == 0.0
     assert "assert (1 + 1) == 3" in tests["test_bad"]["error"]
 
-    assert results["run"] == {"status": "complete", "output": ""}
+    assert results["run"] == {"status": "complete", "output": "", "output-sanitized": ""}
+    assert results["sanitizes-errors"] is True
+    assert tests["test_ok"]["error-sanitized"] == ""
+    assert tests["test_bad"]["error-sanitized"] == "test_suite.py:7: assert (1 + 1) == 3"
     assert results["summary"] == {"score": 0.0, "total": 0.0}
     assert results["submission-id"] is None and results["artifacts"] == []
 
