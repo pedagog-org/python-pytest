@@ -32,6 +32,7 @@ from rpyc.core.stream import SocketStream
 from rpyc.utils.factory import connect_stream
 
 from .codec import NotPlain, decode, encode
+from .output import redirect
 
 # Hard cap on any child's lifetime, in case student code disarms its own alarm.
 MAX_CHILD_SECONDS = 600
@@ -136,6 +137,8 @@ class StudentService(rpyc.Service):  # type: ignore[misc]  # rpyc is untyped
 
 
 def _handle(conn: socket.socket, code_dir: Path) -> None:
+    if not redirect(conn):
+        return
     sys.path.insert(0, str(code_dir))
     os.chdir(code_dir)
     connection = connect_stream(SocketStream(conn), service=StudentService(code_dir), config=RUNNER_CONFIG)
