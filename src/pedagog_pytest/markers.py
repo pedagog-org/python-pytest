@@ -142,7 +142,8 @@ def visibility(
 
     ``@visibility(AFTER_END)`` sets every part at once; the keywords set them
     separately. Everything is visible by default but the error, which waits
-    for the deadline; courses can override it.
+    for the deadline. This is the only place visibility is set: to change
+    what students see, change it here and upload the tests again.
     """
     parts = {"score": score, "feedback": feedback, "stdout": stdout, "error": error}
     if level is not None:

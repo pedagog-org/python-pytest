@@ -18,7 +18,7 @@ from .markers import (
     visibility,
 )
 
-from .scoring import DEFAULT_CLAMP, FULL, ExtraCredit, Full, Rubric, Score, item
+from .scoring import DEFAULT_CLAMP, FULL, MAX_DEPTH, ExtraCredit, Full, Rubric, Score, item, part
 
 __all__ = [
     "DEFAULT_CLAMP",
@@ -28,6 +28,8 @@ __all__ = [
     "Rubric",
     "Score",
     "item",
+    "part",
+    "MAX_DEPTH",
     "rubric",
     "rubric_item",
     "AFTER_END",

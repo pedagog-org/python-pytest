@@ -42,6 +42,8 @@ RUNNER_SOCKET_ENV: Final = "PEDAGOG_RUNNER_SOCKET"
 COLLECTION_TIMEOUT: Final = 60.0
 # Keeps a runaway assertion message from bloating results.yaml.
 MAX_OUTPUT_CHARS: Final = 20_000
+# results.yaml's format: 3 adds nested parts (and says so).
+RESULTS_FORMAT: Final = 3
 
 MARKERS: Final = (
     "pedagog_number(value): label and sort position in the results",
@@ -150,7 +152,7 @@ def _new_scores(item: pytest.Item) -> tuple[Score | None, Rubric | None]:
     multi = item.get_closest_marker("pedagog_rubric")
     if multi is not None:
         rubric: Rubric = multi.args[0]()
-        for s in rubric.items():
+        for s in rubric.walk():
             s.root = item.config.rootpath
         return None, rubric
     return None, None
@@ -209,8 +211,15 @@ def _item_scores(item: pytest.Item) -> list[Score]:
     return [single] if single is not None else multi.items() if multi is not None else []
 
 
+def _failed_paths(score: Score, prefix: str = "") -> list[str]:
+    """Each item or part with a failed check, by its path of ids."""
+    path = f"{prefix}{score.id}"
+    own = [path] if score.failed_checks else []
+    return own + [p for c in score.children for p in _failed_paths(c, path + "/")]
+
+
 def _fail_on_failed_checks(item: pytest.Item) -> None:
-    failed = [s.id for s in _item_scores(item) if s.failed_checks]
+    failed = [p for s in _item_scores(item) for p in _failed_paths(s)]
     if failed:
         item.stash[FAILED_CHECKS_KEY] = failed
         pytest.fail(f"rubric checks failed: {', '.join(failed)}", pytrace=False)
@@ -344,12 +353,12 @@ class _Entry:
 
     def error(self) -> str:
         """What went wrong: what failed checks raised, then pytest's reports."""
-        failures = [f for s in self.scores for f in s.failures]
+        failures = [f for s in self.scores for n in s.walk() for f in n.failures]
         return "\n\n".join([*failures, *self.reports])
 
     def error_sanitized(self) -> str:
         """What went wrong, for students: each failure's summary, then how it got there."""
-        failures = [f for s in self.scores for f in s.sanitized] + self.sanitized
+        failures = [f for s in self.scores for n in s.walk() for f in n.sanitized] + self.sanitized
         return combine(failures) if failures else ""
 
     def status_reason(self) -> str:
@@ -396,19 +405,7 @@ class _Entry:
             }
         )
         if self.scores:
-            doc["items"] = [
-                {
-                    "id": s.id,
-                    "name": s.name,
-                    "score": s.final,
-                    "max": s.points,
-                    "clamp": list(s.bounds),
-                    "extra-credit": s.extra_credit.value,
-                    "attempted": s.attempted,
-                    "steps": s.feedback_steps,
-                }
-                for s in self.scores
-            ]
+            doc["items"] = [_node_doc(s) for s in self.scores]
         doc.update(
             {
                 "stdout": self.stdout[:MAX_OUTPUT_CHARS],
@@ -423,6 +420,28 @@ class _Entry:
         if self.solution_expect is not None:
             doc["solution-expect"] = self.solution_expect.value
         return doc
+
+
+def _node_doc(s: Score) -> dict[str, object]:
+    """An item or part, and the parts below it (results format 3)."""
+    doc: dict[str, object] = {
+        "id": s.id,
+        "name": s.name,
+        "score": s.final,
+        "max": s.declared_max,
+        "clamp": list(s.bounds),
+        "extra-credit": s.extra_credit.value,
+        "attempted": s.attempted,
+        "steps": s.feedback_steps,
+    }
+    if s.children:
+        doc["points"] = s.points
+        doc["parts"] = [_node_doc(c) for c in s.children]
+    if s.visibility:
+        doc["visibility"] = dict(s.visibility)
+    if s.local_scale is not None:
+        doc["scale"] = s.local_scale
+    return doc
 
 
 def _display_name(item: pytest.Item) -> str:
@@ -510,6 +529,7 @@ class ResultsRecorder:
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         entries = self._sorted()
         doc = {
+            "format": RESULTS_FORMAT,
             "submission-id": None,
             "run-id": None,
             # Whether every test could run, and what stopped them if not (for staff).
