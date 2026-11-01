@@ -108,10 +108,58 @@ def test_sort(scores: Sorting):
   get `id[param]`); duplicates are a usage error. Tests without one have no id.
 - `@rubric_item` and `@rubric` are mutually exclusive.
 
+**Parts (nested rubrics):** `part(...)` places one `Rubric` inside another, to any depth
+up to 8 levels below the test. Parts are declared up front, so every maximum is known
+even if a test stops at its first line; their checks fill them in as the test runs.
+
+```python
+from pedagog_pytest import AFTER_END, ExtraCredit, Rubric, Score, item, part, rubric
+
+class Spans(Rubric):
+    count: Score = item("has rank(A) vectors", points=1)
+    each: Score = item("each vector belongs", points=2)   # its checks come from a loop
+
+class ColumnSpace(Rubric):
+    pivots: Score = item("pivcols = the pivot columns of A", points=1)
+    spans: Spans = part("C spans col(A)")
+
+class Bases(Rubric):                                       # 4 points
+    col: ColumnSpace = part("Column space", feedback=AFTER_END)
+
+class PartB(Rubric):
+    a2: Bases = part("A2", worth=2)                        # Bases rescaled to 2
+    a4: Bases = part("A4 (given)", points=0.5)             # 0.5 of its own + 4
+
+@rubric(PartB, id="3b", name="Part B: bases")
+def test_part_b(scores: PartB):
+    with scores.a4.check(points=0.5, reason="A4 is the given matrix"):   # the part's own points
+        assert np.array_equal(a4, GIVEN)
+    for j, col in enumerate(c.T, start=1):
+        with scores.a4.col.spans.each.check(points=2 / c.shape[1], reason=f"column {j}"):
+            assert is_pivot_column(a4, col), f"column {j} isn't a pivot column"
+```
+
+- `part(name=None, *, points=0, worth=None, id=None, clamp=(0, FULL), extra_credit=NONE,
+  score=None, feedback=None, rubric=None)`. The sub-rubric is the attribute's annotation,
+  or `rubric=`.
+- **Points:** a part's score is its own checks and awards (worth its own `points`) plus its
+  items' and parts', clamped (`FULL` is everything it could earn). A test's own rubric has
+  no points of its own: score its items and parts.
+- **`worth=`** is the part's total, its own points included. The sub-rubric is rescaled to
+  fit: every item, check, award and clamp under it, by one factor (nested factors
+  multiply), and tests keep scoring in the sub-rubric's own terms. It aims at the
+  sub-rubric's counted total; extra credit inside scales by the same factor without being
+  part of the target. On an extra-credit part, `worth` is its bonus value. A sub-rubric
+  that is only extra credit can't be scaled on a regular part: mark the part extra credit.
+- **Visibility:** `score=` and `feedback=` on a part (or an `item`) hide that part longer
+  than the test's `@visibility` says; they can only tighten it. A part whose score is
+  hidden is left out of the student's totals, as hidden tests are.
+- **Extra credit:** any part may be extra credit, with everything under it.
+
 ## What students see
 
-Each test's result has four parts, each with its own visibility (`@visibility`; pedagog
-courses can override it):
+Each test's result has four parts, each with its own visibility (`@visibility`, the only
+place it's set: to change what students see, change the tests and upload them again):
 
 | Part | What it is |
 | --- | --- |
@@ -195,10 +243,13 @@ plugin writes `results.yaml` (as JSON, which is valid YAML):
   `trace`, `visibility`
   (`score`, `feedback`, `stdout`, `error`), and optional `number` / `solution-expect`;
 - scored tests list their `items` (one for `@rubric_item`): `id`, `name`, `score`, `max`,
-  `clamp`, `extra-credit`, `attempted`, and `steps` (the feedback);
+  `clamp`, `extra-credit`, `attempted`, and `steps` (the feedback). A part adds `points`
+  (its own), its `parts` (the same shape, recursively), and optionally `visibility`
+  (`score`, `feedback`) and `scale` (the factor its `worth=` applied); its points are
+  written already scaled;
 - `summary` totals the scores and maxes.
 
-Version 2.2 added `error-sanitized`, `run.output-sanitized` and `sanitizes-errors`. Version 2
+Version 3 writes `format: 3` and adds nested parts. Version 2.2 added `error-sanitized`, `run.output-sanitized` and `sanitizes-errors`. Version 2
 changed the format: `output` became `error`, text `feedback` became items'
 `steps`, `<collection>` entries became `run`, and `@visibility(output=)` became four parts.
 pedagog reads both.

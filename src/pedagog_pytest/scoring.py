@@ -14,9 +14,14 @@ multi-item test declares a ``Rubric`` subclass, applies it with
             assert leaks() == 0
         scores.recursion.award(1, reason="recursive helper")
 
+Rubrics nest: ``part(...)`` places another ``Rubric`` inside one, to any depth
+(up to ``MAX_DEPTH``). A part scores its own checks (with its own ``points``)
+plus its children's, and ``worth=`` rescales a sub-rubric reused at another
+weight.
+
 Points only come from explicit calls: an item that is never awarded scores 0.
-Awards add up, stand even if the test fails afterwards, and the item's clamp is
-applied once to the final total.
+Awards add up, stand even if the test fails afterwards, and each item's (and
+part's) clamp is applied once to its final total.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ import math
 import os
 import sysconfig
 import traceback
+import typing
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -55,6 +61,10 @@ FULL: Final = Full()
 Bound = Union[float, Full, None]
 Clamp = Optional[Tuple[Bound, Bound]]
 DEFAULT_CLAMP: Final[Clamp] = (0.0, FULL)
+# How deep parts may nest below a test (pedagog refuses deeper results).
+MAX_DEPTH: Final = 8
+# When students see a part's score or feedback (see markers.Visibility).
+VISIBILITIES: Final = ("visible", "hidden", "after_end", "after_publish")
 
 
 class ExtraCredit(str, enum.Enum):
@@ -156,8 +166,20 @@ def _indent(text: str, prefix: str = "  ") -> str:
     return "\n".join(prefix + line for line in text.splitlines())
 
 
+def _visibility(part: str, value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(getattr(value, "value", value))
+    if text not in VISIBILITIES:
+        raise ValueError(f"{part} visibility must be one of {', '.join(VISIBILITIES)}, got {value!r}")
+    return text
+
+
 class Score:
-    """The points earned on one rubric item during one test."""
+    """The points earned on one rubric item (or part) during one test.
+
+    Points are recorded scaled: ``scale`` is the factor a ``worth=`` above
+    applies (1 without one), so a test scores in its rubric's own terms."""
 
     def __init__(
         self,
@@ -166,15 +188,25 @@ class Score:
         points: float = 0.0,
         clamp: Clamp = DEFAULT_CLAMP,
         extra_credit: ExtraCredit = ExtraCredit.NONE,
+        *,
+        scale: float = 1.0,
+        visibility: dict[str, str] | None = None,
     ) -> None:
         _validate(points, clamp)
         self.id = id
         self.name = name
-        self.points = float(points)
+        self.scale = scale
+        self.points = float(points) * scale
         self.clamp = clamp
         self.extra_credit = ExtraCredit(extra_credit)
+        # A part's own score/feedback visibility (tighter than the test's).
+        self.visibility = dict(visibility or {})
+        # A part's items and parts (empty for an item).
+        self.children: list[Score] = []
+        # The factor this part's own worth= applied (for the trace and results).
+        self.local_scale: float | None = None
         self.total = 0.0
-        self.attempted = False
+        self._attempted = False
         # What students are told (feedback): checks, and awards with a reason.
         self.feedback_steps: list[dict[str, object]] = []
         # How the score came about, for instructors (the trace).
@@ -188,17 +220,36 @@ class Score:
         self.root: Path | None = None
 
     @property
+    def attempted(self) -> bool:
+        """Any points awarded (or ``attempt()``), here or in a part below."""
+        return self._attempted or any(c.attempted for c in self.children)
+
+    @attempted.setter
+    def attempted(self, value: bool) -> None:
+        self._attempted = value
+
+    @property
+    def full(self) -> float:
+        """Everything it could earn: its own points and its children's (extra credit included)."""
+        return self.points + sum(c.full for c in self.children)
+
+    @property
     def bounds(self) -> tuple[float | None, float | None]:
         if self.clamp is None:
             return (None, None)
-        low, high = (self.points if isinstance(b, Full) else b for b in self.clamp)
+        low, high = (self.full if isinstance(b, Full) else None if b is None else b * self.scale for b in self.clamp)
         return (None if low is None else float(low), None if high is None else float(high))
+
+    @property
+    def subtotal(self) -> float:
+        """Its own checks and awards, plus its children's (each clamped)."""
+        return self.total + sum(c.final for c in self.children)
 
     @property
     def final(self) -> float:
         """The running total, clamped."""
         low, high = self.bounds
-        value = self.total
+        value = self.subtotal
         if low is not None:
             value = max(value, low)
         if high is not None:
@@ -212,12 +263,23 @@ class Score:
         return self.extra_credit is ExtraCredit.ATTEMPTED_WORK and self.attempted
 
     @property
+    def declared_max(self) -> float:
+        """Its own points and its children's counted maximum."""
+        return self.points + sum(c.max for c in self.children)
+
+    @property
     def max(self) -> float:
-        """What the item adds to the test's maximum."""
-        return self.points if self.counts_in_max else 0.0
+        """What it adds to its parent's (or the test's) maximum."""
+        return self.declared_max if self.counts_in_max else 0.0
+
+    def walk(self) -> Iterator[Score]:
+        """This node and every part and item below it."""
+        yield self
+        for c in self.children:
+            yield from c.walk()
 
     def _amount(self, points: float | Full) -> float:
-        amount = max(self.points - self.total, 0.0) if isinstance(points, Full) else float(points)
+        amount = max(self.points - self.total, 0.0) if isinstance(points, Full) else float(points) * self.scale
         if not math.isfinite(amount):
             raise ValueError(f"rubric item {self.id!r}: points must be finite, got {points!r}")
         return amount
@@ -225,7 +287,7 @@ class Score:
     def _add(self, amount: float) -> None:
         self.total += amount
         if amount > 0:
-            self.attempted = True
+            self._attempted = True
 
     def _step(self, id: str | None, step: dict[str, object]) -> None:
         if id is not None:
@@ -253,19 +315,19 @@ class Score:
         not in the feedback."""
         self.total = self._amount(points)
         if self.total > 0:
-            self.attempted = True
+            self._attempted = True
         self.steps.append(f"set {_num(self.total)}{'  ' + reason if reason else ''}  = {_num(self.total)}")
 
     def nil(self) -> None:
         """Back to 0 points, with no feedback and not attempted, as if never touched."""
         self.total = 0.0
-        self.attempted = False
+        self._attempted = False
         self.feedback_steps.clear()
         self.steps.append("nil()  = 0 (feedback and attempted cleared)")
 
     def attempt(self) -> None:
         """Mark the item attempted without awarding points (for ``ATTEMPTED_WORK``)."""
-        self.attempted = True
+        self._attempted = True
         self.steps.append("attempt()  attempted")
 
     @contextmanager
@@ -311,13 +373,21 @@ class Score:
     def header(self) -> str:
         low, high = self.bounds
         clamp = f"[{_bound(low, '-inf')}, {_bound(high, 'inf')}]"
-        return f"points {_num(self.points)}, clamp {clamp}, {self.extra_credit.value}"
+        head = f"points {_num(self.points)}, clamp {clamp}, {self.extra_credit.value}"
+        if self.local_scale is not None:
+            head += f", parts scaled ×{self.local_scale:.4g}"
+        return head
 
     def trace(self) -> list[str]:
         """How the item's score was calculated, step by step (for instructors)."""
-        lines = list(self.steps) if self.steps else ["(never awarded)"]
-        final = f"final {_num(self.total)}"
-        if self.final != self.total:
+        lines = list(self.steps) if self.steps else (["(never awarded)"] if not self.children else [])
+        for c in self.children:
+            lines.append(f"{c.id}  {c.header()}")
+            lines += _indent("\n".join(c.trace())).splitlines()
+        final = f"final {_num(self.subtotal)}"
+        if self.children:
+            final = f"final {_num(self.total)} own + {_num(self.subtotal - self.total)} parts = {_num(self.subtotal)}"
+        if self.final != self.subtotal:
             final += f" -> clamped to {_num(self.final)}"
         if self.extra_credit is ExtraCredit.BONUS:
             final += "; bonus: not in max"
@@ -336,11 +406,17 @@ class ItemSpec:
     points: float
     clamp: Clamp
     extra_credit: ExtraCredit
+    score: str | None = None
+    feedback: str | None = None
 
     def __post_init__(self) -> None:
         _validate(self.points, self.clamp)
         if self.id is not None and not (isinstance(self.id, str) and self.id.strip()):
             raise ValueError(f"rubric item id must be a non-empty string, got {self.id!r}")
+
+    @property
+    def visibility(self) -> dict[str, str]:
+        return {k: v for k, v in (("score", self.score), ("feedback", self.feedback)) if v is not None}
 
 
 def item(
@@ -350,26 +426,94 @@ def item(
     id: str | None = None,
     clamp: Clamp = DEFAULT_CLAMP,
     extra_credit: ExtraCredit = ExtraCredit.NONE,
+    score: object = None,
+    feedback: object = None,
 ) -> Score:
     """Declare a rubric item on a ``Rubric`` subclass.
 
     ``id`` defaults to the attribute name and ``name`` to the id. ``clamp`` bounds
     the final total (``FULL`` is the item's points; ``None`` leaves a side, or
-    with ``clamp=None`` both sides, unbounded). Typed as ``Score`` because that's
-    what the attribute is on the instance the test receives.
+    with ``clamp=None`` both sides, unbounded). ``score`` and ``feedback`` hide
+    this item's parts of the result longer than the test's visibility says
+    (they can only tighten it). Typed as ``Score`` because that's what the
+    attribute is on the instance the test receives.
     """
-    return cast(Score, ItemSpec(id, name, float(points), clamp, ExtraCredit(extra_credit)))
+    return cast(
+        Score,
+        ItemSpec(
+            id, name, float(points), clamp, ExtraCredit(extra_credit),
+            _visibility("score", score), _visibility("feedback", feedback),
+        ),
+    )
 
 
-class Rubric:
-    """Base class for multi-item rubrics; subclasses declare items with ``item()``."""
+@dataclass(frozen=True)
+class PartSpec:
+    """A nested rubric's place in another: its own points, and its weight."""
 
-    _pedagog_specs: ClassVar[dict[str, ItemSpec]] = {}
+    id: str | None
+    name: str | None
+    points: float
+    worth: float | None
+    clamp: Clamp
+    extra_credit: ExtraCredit
+    score: str | None
+    feedback: str | None
+    rubric: type[Rubric] | None
+
+    def __post_init__(self) -> None:
+        _validate(self.points, self.clamp)
+        if self.id is not None and not (isinstance(self.id, str) and self.id.strip()):
+            raise ValueError(f"part id must be a non-empty string, got {self.id!r}")
+        if self.worth is not None and not (math.isfinite(self.worth) and self.worth >= self.points):
+            raise ValueError(f"part worth must be a number >= its own points ({self.points:g}), got {self.worth!r}")
+
+    @property
+    def visibility(self) -> dict[str, str]:
+        return {k: v for k, v in (("score", self.score), ("feedback", self.feedback)) if v is not None}
+
+
+def part(
+    name: str | None = None,
+    *,
+    points: float = 0.0,
+    worth: float | None = None,
+    id: str | None = None,
+    clamp: Clamp = DEFAULT_CLAMP,
+    extra_credit: ExtraCredit = ExtraCredit.NONE,
+    score: object = None,
+    feedback: object = None,
+    rubric: type[Rubric] | None = None,
+) -> Any:
+    """Place another ``Rubric`` inside this one, as a part.
+
+    The sub-rubric is the attribute's annotation (``square: Square = part(...)``),
+    or ``rubric=``. ``points`` are the part's own, for checks placed directly on
+    it; its score is those plus its children's, clamped. ``worth`` is the part's
+    total (its own points included): the sub-rubric is rescaled to fit, and tests
+    keep scoring in its own terms. Extra credit inside scales by the same factor
+    without being part of the target. On an extra-credit part, ``worth`` is its
+    bonus value. ``score`` and ``feedback`` can only tighten the test's
+    visibility.
+    """
+    return PartSpec(
+        id, name, float(points), None if worth is None else float(worth), clamp, ExtraCredit(extra_credit),
+        _visibility("score", score), _visibility("feedback", feedback), rubric,
+    )
+
+
+class Rubric(Score):
+    """Base class for rubrics; subclasses declare items with ``item()`` and
+    nested rubrics with ``part()``. An instance is a part: it scores its own
+    checks (its own ``points``) plus its items' and parts'."""
+
+    _pedagog_specs: ClassVar[dict[str, ItemSpec | PartSpec]] = {}
+    _pedagog_parts: ClassVar[dict[str, type[Rubric]] | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         specs = dict(getattr(cls, "_pedagog_specs", {}))
-        specs.update({k: v for k, v in vars(cls).items() if isinstance(v, ItemSpec)})
+        specs.update({k: v for k, v in vars(cls).items() if isinstance(v, (ItemSpec, PartSpec))})
         if not specs:
             raise TypeError(f"rubric {cls.__name__} declares no items")
         ids = [spec.id or attr for attr, spec in specs.items()]
@@ -377,12 +521,127 @@ class Rubric:
         if duplicates:
             raise TypeError(f"rubric {cls.__name__} has duplicate item ids: {', '.join(duplicates)}")
         cls._pedagog_specs = specs
+        cls._pedagog_parts = None
 
-    def __init__(self) -> None:
+    @classmethod
+    def _parts(cls) -> dict[str, type[Rubric]]:
+        """Each part's sub-rubric, from ``rubric=`` or the annotation (resolved
+        once, when first needed, so sub-rubrics may be declared in any order)."""
+        if cls._pedagog_parts is None:
+            hints: dict[str, Any] = {}
+            try:
+                hints = typing.get_type_hints(cls)
+            except Exception:
+                hints = {}
+            found: dict[str, type[Rubric]] = {}
+            for attr, spec in cls._pedagog_specs.items():
+                if not isinstance(spec, PartSpec):
+                    continue
+                sub = spec.rubric or hints.get(attr)
+                if not (isinstance(sub, type) and issubclass(sub, Rubric)):
+                    raise TypeError(
+                        f"part {cls.__name__}.{attr} needs its rubric: annotate it "
+                        f"({attr}: SomeRubric = part(...)) or pass rubric=SomeRubric"
+                    )
+                found[attr] = sub
+            cls._pedagog_parts = found
+        return cls._pedagog_parts
+
+    @classmethod
+    def declared(cls, counted_only: bool = True) -> float:
+        """The rubric's total at its declared points (only what counts in the max
+        by default), parts at their worth."""
+        total = 0.0
+        parts = cls._parts()
+        for attr, spec in cls._pedagog_specs.items():
+            if counted_only and spec.extra_credit is not ExtraCredit.NONE:
+                continue
+            if isinstance(spec, ItemSpec):
+                total += spec.points
+            elif spec.worth is not None:
+                total += spec.worth
+            else:
+                total += spec.points + parts[attr].declared(counted_only)
+        return total
+
+    def __init__(
+        self,
+        id: str = "",
+        name: str = "",
+        points: float = 0.0,
+        clamp: Clamp = DEFAULT_CLAMP,
+        extra_credit: ExtraCredit = ExtraCredit.NONE,
+        *,
+        scale: float = 1.0,
+        visibility: dict[str, str] | None = None,
+        depth: int = 0,
+    ) -> None:
+        super().__init__(
+            id or type(self).__name__, name or id or type(self).__name__, points, clamp, extra_credit,
+            scale=scale, visibility=visibility,
+        )
+        if depth > MAX_DEPTH:
+            raise TypeError(f"rubric {type(self).__name__} nests deeper than {MAX_DEPTH} levels")
+        # A test's own rubric (not a part) has no points of its own.
+        self.top = depth == 0
+        parts = self._parts()
         for attr, spec in self._pedagog_specs.items():
-            item_id = spec.id or attr
-            setattr(self, attr, Score(item_id, spec.name or item_id, spec.points, spec.clamp, spec.extra_credit))
+            node_id = spec.id or attr
+            node: Score
+            if isinstance(spec, ItemSpec):
+                node = Score(
+                    node_id, spec.name or node_id, spec.points, spec.clamp, spec.extra_credit,
+                    scale=scale, visibility=spec.visibility,
+                )
+            else:
+                sub = parts[attr]
+                factor = 1.0
+                if spec.worth is not None:
+                    base = sub.declared()
+                    if base <= 0 and spec.extra_credit is not ExtraCredit.NONE:
+                        base = sub.declared(counted_only=False)
+                    if base <= 0:
+                        raise TypeError(
+                            f"part {type(self).__name__}.{attr} (worth={spec.worth:g}): {sub.__name__} has no "
+                            "counted points to scale; mark the part extra credit and put worth= on it"
+                        )
+                    factor = (spec.worth - spec.points) / base
+                node = sub(
+                    node_id, spec.name or node_id, spec.points, spec.clamp, spec.extra_credit,
+                    scale=scale, visibility=spec.visibility, depth=depth + 1,
+                )
+                if spec.worth is not None:
+                    node.local_scale = factor
+                    node._rescale(factor)
+            setattr(self, attr, node)
+            self.children.append(node)
+
+    def _rescale(self, factor: float) -> None:
+        """Apply a worth= factor to everything below this part (not its own points)."""
+        for c in self.children:
+            for n in c.walk():
+                n.scale *= factor
+                n.points *= factor
+
+    def _no_own_points(self) -> None:
+        if self.top:
+            raise TypeError(
+                f"rubric {type(self).__name__} is the test's: it has no points of its own; "
+                "score one of its items or parts"
+            )
+
+    def award(self, points: float | Full = FULL, reason: str | None = None, *, id: str | None = None) -> None:
+        self._no_own_points()
+        super().award(points, reason, id=id)
+
+    @contextmanager
+    def check(
+        self, points: float | Full = FULL, reason: str | None = None, *, id: str | None = None
+    ) -> Iterator[None]:
+        self._no_own_points()
+        with super().check(points, reason, id=id):
+            yield
 
     def items(self) -> list[Score]:
         """This test's scores, in declaration order."""
-        return [cast(Score, getattr(self, attr)) for attr in self._pedagog_specs]
+        return list(self.children)
